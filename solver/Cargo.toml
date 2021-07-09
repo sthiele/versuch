@@ -1,0 +1,13 @@
+[package]
+name = "solver"
+version = "0.1.0"
+authors = ["Sven Thiele <sthiel78@gmail.com>"]
+description = "A CDNL solver."
+edition = "2018"
+license = "MIT"
+repository = "https://github.com/sthiele/versuch"
+# documentation = "https://docs.rs/versuch"
+
+[dependencies]
+rustc-hash = "1.1.0"
+genawaiter = { version = "0.99" }
