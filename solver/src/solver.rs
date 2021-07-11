@@ -42,7 +42,7 @@ pub enum SolveResult {
 // }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum PropagationResult {
+enum PropagationResult {
     Ok,
     Conflict(Clause),
 }
@@ -108,7 +108,6 @@ impl Solver {
                 } else if self.assignment_complete() {
                     co.yield_(SolveResult::Sat(self.assignments.clone())).await;
 
-                    //TODO: decrease number of solutions count down s
                     if self.decision_level == 0 {
                         return;
                     } else {
@@ -139,7 +138,7 @@ impl Solver {
         .into_iter()
     }
 
-    pub(crate) fn create_watch_lists(&mut self) {
+    fn create_watch_lists(&mut self) {
         self.watch_lists.clear();
         for nogood in &self.nogoods {
             //  TODO: special handling for nogoods of size 1
@@ -152,7 +151,7 @@ impl Solver {
     }
 
     /// analyze conflict and learn UIP nogood
-    pub(crate) fn conflict_resolution(&self, nogood: &[Literal]) -> (Clause, Literal, usize) {
+    fn conflict_resolution(&self, nogood: &[Literal]) -> (Clause, Literal, usize) {
         let mut nogood = nogood.to_owned();
         let sigma = loop {
             // eprintln!("delta:{:?}", nogood);
@@ -203,7 +202,7 @@ impl Solver {
         (nogood, sigma, k)
     }
     /// increase decision level assign truth value to a previously unassigned variable
-    pub(crate) fn decide(&mut self) {
+    fn decide(&mut self) {
         self.decision_level += 1;
         eprintln!("decision_level: {:?}", self.decision_level);
         let decision_literal = self.choose();
@@ -228,7 +227,7 @@ impl Solver {
     }
 
     /// return true if all variables have a truth value assignment
-    pub(crate) fn assignment_complete(&self) -> bool {
+    fn assignment_complete(&self) -> bool {
         for index in 1..self.number_of_variables + 1 {
             if self.assignments.contains(&Literal(index as i32)) {
                 continue;
@@ -241,7 +240,7 @@ impl Solver {
         true
     }
     /// return true if there is a conflich on decision level 0
-    pub fn is_top_level_conflict(&self, nogood: &[Literal]) -> bool {
+    fn is_top_level_conflict(&self, nogood: &[Literal]) -> bool {
         for literal in nogood {
             let (_id, decision_level) = self.derivations.get(literal).unwrap();
             if *decision_level > 0 {
@@ -251,7 +250,7 @@ impl Solver {
         true
     }
     /// backjump to decision level x and rewind assignment
-    pub fn backjump(&mut self) {
+    fn backjump(&mut self) {
         eprintln!("backjump");
         eprintln!("decision_level {}", self.decision_level);
 
@@ -289,7 +288,7 @@ impl Solver {
     }
 
     /// run unit propagation and unfounded set check
-    pub(crate) fn propagate(&mut self) -> PropagationResult {
+    fn propagate(&mut self) -> PropagationResult {
         eprintln!("propagate");
         if let PropagationResult::Conflict(nogood) = self.unit_propagation() {
             return PropagationResult::Conflict(nogood);
@@ -301,11 +300,11 @@ impl Solver {
     }
     
     /// learn a nogood for an unfounded loop
-    pub fn unfounded_loop_learning(&mut self) {
+    fn unfounded_loop_learning(&mut self) {
         todo!()
     }
 
-    pub(crate) fn unit_propagation(&mut self) -> PropagationResult {
+    fn unit_propagation(&mut self) -> PropagationResult {
         let mut propagation_queue: VecDeque<Literal> = self.assignments.iter().cloned().collect();
 
         loop {
