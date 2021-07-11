@@ -7,19 +7,19 @@ use genawaiter::sync::Gen;
 pub struct Literal(pub(crate) i32);
 
 impl Literal {
-    // fn id(&self) -> usize {
-    //     self.0.unsigned_abs() as usize
-    // }
+    fn id(&self) -> usize {
+        self.0.unsigned_abs() as usize
+    }
     pub fn negate(&self) -> Literal {
         Literal(-self.0)
     }
 }
 
-// #[test]
-// fn test_id() {
-//     let lit = Literal(-2);
-//     assert_eq!(lit.id(), 2);
-// }
+#[test]
+fn test_id() {
+    let lit = Literal(-2);
+    assert_eq!(lit.id(), 2);
+}
 
 // TODO: Nogoods from a program
 
@@ -29,6 +29,7 @@ pub(crate) struct WatchList {
     right_watch: usize,
     nogood: Vec<Literal>,
 }
+
 type Clause = Vec<Literal>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,17 +51,44 @@ enum PropagationResult {
 pub type Map<K, V> = rustc_hash::FxHashMap<K, V>;
 pub type Assignments = Vec<Literal>;
 
+pub struct Builder {
+    pub(crate) nogoods: Vec<Vec<Literal>>,
+}
+impl Builder {
+    pub fn build(self) -> Solver {
+        let mut number_of_variables = 0;
+        for clause in &self.nogoods {
+            for lit in clause {
+                if lit.id() > number_of_variables {
+                    number_of_variables = lit.id();
+                }
+            }
+        }
+
+        Solver {
+            tight: true,
+            number_of_variables,
+            assignments: vec![],
+            decisions: vec![],
+            watch_lists: vec![],
+            nogoods: self.nogoods,
+            decision_level: 0,
+            chronological_backtracking_level: 0,
+            derivations: Map::default(),
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Solver {
-    pub(crate) tight: bool,
-    pub(crate) number_of_variables: u32,
-    pub(crate) assignments: Assignments,
-    pub(crate) decisions: Vec<Literal>,
-    pub(crate) watch_lists: Vec<WatchList>,
-    pub(crate) nogoods: Vec<Clause>,
-    pub(crate) decision_level: usize,
-    pub(crate) chronological_backtracking_level: usize,
-    pub(crate) derivations: Map<Literal, (Option<usize>, usize)>,
+    tight: bool,
+    number_of_variables: usize,
+    assignments: Assignments,
+    decisions: Vec<Literal>,
+    watch_lists: Vec<WatchList>,
+    nogoods: Vec<Clause>,
+    decision_level: usize,
+    chronological_backtracking_level: usize,
+    derivations: Map<Literal, (Option<usize>, usize)>,
 }
 impl Solver {
     pub fn solve(&mut self) -> impl Iterator<Item = SolveResult> + '_ {
@@ -298,7 +326,7 @@ impl Solver {
         }
         PropagationResult::Ok
     }
-    
+
     /// learn a nogood for an unfounded loop
     fn unfounded_loop_learning(&mut self) {
         todo!()
