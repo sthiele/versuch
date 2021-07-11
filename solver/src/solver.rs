@@ -63,7 +63,7 @@ pub struct Solver {
     pub(crate) derivations: Map<Literal, (Option<usize>, usize)>,
 }
 impl Solver {
-    pub fn solve<'a, 'b>(&mut self) -> impl Iterator<Item = SolveResult> + '_ {
+    pub fn solve(&mut self) -> impl Iterator<Item = SolveResult> + '_ {
         Gen::new(|co| async move {
             self.create_watch_lists();
             let mut sat = true;
@@ -73,39 +73,37 @@ impl Solver {
                     if self.is_top_level_conflict(&nogood) {
                         sat = false;
                         co.yield_(SolveResult::UnSat).await;
-                    } else {
-                        if self.chronological_backtracking_level < self.decision_level {
-                            let (uip, sigma, k) = self.conflict_resolution(&nogood);
-                            eprintln!("uip: {:?}", &uip);
-                            if self.chronological_backtracking_level > k {
-                                self.decision_level = self.chronological_backtracking_level;
-                            } else {
-                                self.decision_level = k;
-                            }
-                            eprintln!("new_decision_level: {}", self.decision_level);
-                            self.backjump();
-
-                            // add complement
-                            let negated_sigma = sigma.negate();
-                            self.assignments.push(negated_sigma);
-                            self.derivations.insert(negated_sigma, (None, k));
-
-                            self.nogoods.push(uip); // TODO: book keeping about learned nogoods
-                            self.create_watch_lists();
+                    } else if self.chronological_backtracking_level < self.decision_level {
+                        let (uip, sigma, k) = self.conflict_resolution(&nogood);
+                        eprintln!("uip: {:?}", &uip);
+                        if self.chronological_backtracking_level > k {
+                            self.decision_level = self.chronological_backtracking_level;
                         } else {
-                            //get decision literal from this decision_level
-                            let decision_literal = self.decisions[self.decision_level - 1];
-                            self.decision_level -= 1;
-                            self.chronological_backtracking_level = self.decision_level;
-
-                            self.backjump();
-
-                            // add complement
-                            let negated_decision_literal = decision_literal.negate();
-                            self.assignments.push(negated_decision_literal);
-                            self.derivations
-                                .insert(negated_decision_literal, (None, self.decision_level));
+                            self.decision_level = k;
                         }
+                        eprintln!("new_decision_level: {}", self.decision_level);
+                        self.backjump();
+
+                        // add complement
+                        let negated_sigma = sigma.negate();
+                        self.assignments.push(negated_sigma);
+                        self.derivations.insert(negated_sigma, (None, k));
+
+                        self.nogoods.push(uip); // TODO: book keeping about learned nogoods
+                        self.create_watch_lists();
+                    } else {
+                        //get decision literal from this decision_level
+                        let decision_literal = self.decisions[self.decision_level - 1];
+                        self.decision_level -= 1;
+                        self.chronological_backtracking_level = self.decision_level;
+
+                        self.backjump();
+
+                        // add complement
+                        let negated_decision_literal = decision_literal.negate();
+                        self.assignments.push(negated_decision_literal);
+                        self.derivations
+                            .insert(negated_decision_literal, (None, self.decision_level));
                     }
                 } else if self.assignment_complete() {
                     co.yield_(SolveResult::Sat(self.assignments.clone())).await;
@@ -161,24 +159,22 @@ impl Solver {
             let sigma = nogood[0];
             let (nogood_index, decision_level_sigma) = self.derivations.get(&sigma).unwrap();
 
-            if {
-                // a nogood is a unique implication point if there is no other literal
-                // from the same decision level as sigma
-                let mut iter = nogood.iter();
-                let unique = loop {
-                    if let Some(literal) = iter.next() {
-                        if *literal != sigma {
-                            let (_, decision_level) = self.derivations.get(literal).unwrap();
-                            if decision_level == decision_level_sigma {
-                                break false;
-                            }
+            // a nogood is a unique implication point if there is no other literal
+            // from the same decision level as sigma
+            let mut iter = nogood.iter();
+            let unique = loop {
+                if let Some(literal) = iter.next() {
+                    if *literal != sigma {
+                        let (_, decision_level) = self.derivations.get(literal).unwrap();
+                        if decision_level == decision_level_sigma {
+                            break false;
                         }
-                    } else {
-                        break true;
                     }
-                };
-                unique
-            } {
+                } else {
+                    break true;
+                }
+            };
+            if unique {
                 break sigma;
             }
 
@@ -272,7 +268,7 @@ impl Solver {
         // }
         // self.assignments = new_assignments;
 
-        if self.assignments.len() > 0 {
+        if !self.assignments.is_empty() {
             let mut index = self.assignments.len();
 
             while index > 0 {
@@ -286,12 +282,12 @@ impl Solver {
                 }
             }
         }
-
         // backtrack decisions
         while self.decisions.len() > self.decision_level {
             self.decisions.pop();
         }
     }
+
     /// run unit propagation and unfounded set check
     pub(crate) fn propagate(&mut self) -> PropagationResult {
         eprintln!("propagate");
@@ -303,6 +299,7 @@ impl Solver {
         }
         PropagationResult::Ok
     }
+    
     /// learn a nogood for an unfounded loop
     pub fn unfounded_loop_learning(&mut self) {
         todo!()
