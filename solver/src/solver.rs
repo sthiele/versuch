@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::usize;
 // solve() uses a SolveResult generator as iterator.
 use genawaiter::sync::Gen;
@@ -30,7 +31,7 @@ pub(crate) struct WatchList {
 }
 type Clause = Vec<Literal>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SolveResult {
     UnSat,
     Sat(Assignments),
@@ -43,7 +44,6 @@ pub enum SolveResult {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PropagationResult {
     Ok,
-    Unfinished,
     Conflict(Clause),
 }
 /// Map implementation used by the library.
@@ -146,8 +146,8 @@ impl Solver {
         for nogood in &self.nogoods {
             //  TODO: special handling for nogoods of size 1
             self.watch_lists.push(WatchList {
-                left_watch: 0,
-                right_watch: nogood.len() - 1,
+                left_watch: 1,
+                right_watch: nogood.len(),
                 nogood: nogood.clone(),
             })
         }
@@ -291,14 +291,11 @@ impl Solver {
         while self.decisions.len() > self.decision_level {
             self.decisions.pop();
         }
-
-        eprintln!("backjump");
     }
     /// run unit propagation and unfounded set check
     pub(crate) fn propagate(&mut self) -> PropagationResult {
         eprintln!("propagate");
         if let PropagationResult::Conflict(nogood) = self.unit_propagation() {
-            // eprintln!("conflicting nogood: {:?}", nogood);
             return PropagationResult::Conflict(nogood);
         }
         if !self.tight {
@@ -312,141 +309,65 @@ impl Solver {
     }
 
     pub(crate) fn unit_propagation(&mut self) -> PropagationResult {
-        let mut wl_index = 0;
+        let mut propagation_queue: VecDeque<Literal> = self.assignments.iter().cloned().collect();
+
         loop {
-            if wl_index < self.watch_lists.len() {
-                let mut current_watch_list = &mut self.watch_lists[wl_index];
+            if let Some(p) = propagation_queue.pop_front() {
+                for (index, current_watch_list) in self.watch_lists.iter_mut().enumerate() {
+                    if current_watch_list.nogood[current_watch_list.left_watch - 1] == p {
+                        current_watch_list.left_watch += 1;
+                    }
+                    if current_watch_list.nogood[current_watch_list.right_watch - 1] == p {
+                        current_watch_list.right_watch -= 1;
+                    }
 
-                // eprintln!("watch_list {}: {:?}", wl_index, current_watch_list);
-                let mut assignments = self.assignments.clone();
-                let prop_res = loop {
-                    match assignments.pop() {
-                        None => {
-                            if current_watch_list.left_watch == current_watch_list.right_watch {
-                                let res = current_watch_list.nogood[current_watch_list.right_watch];
-                                if self.assignments.contains(&res) {
-                                    eprintln!(
-                                        "conflicting nogood: {:?}",
-                                        current_watch_list.nogood
-                                    );
-                                    break PropagationResult::Conflict(
-                                        current_watch_list.nogood.clone(),
-                                    );
-                                }
-                                let res = res.negate();
-                                if !self.assignments.contains(&res) {
-                                    eprintln!("infer: {:?}", res);
-                                    self.assignments.push(res);
-                                    assignments.push(res);
-                                    self.derivations
-                                        .insert(res, (Some(wl_index), self.decision_level));
-                                    break PropagationResult::Unfinished;
-                                } else {
-                                    break PropagationResult::Ok;
-                                }
-                            } else if current_watch_list.left_watch > current_watch_list.right_watch
-                            {
-                                eprintln!("conflicting nogood: {:?}", current_watch_list.nogood);
-                                return PropagationResult::Conflict(
-                                    current_watch_list.nogood.clone(),
-                                );
-                            } else {
-                                break PropagationResult::Ok;
-                            }
+                    if current_watch_list.left_watch > current_watch_list.right_watch {
+                        eprintln!("conflicting nogood: {:?}", current_watch_list.nogood);
+                        return PropagationResult::Conflict(current_watch_list.nogood.clone());
+                    }
+                    if current_watch_list.left_watch == current_watch_list.right_watch {
+                        let res = current_watch_list.nogood[current_watch_list.right_watch - 1];
+                        if self.assignments.contains(&res) {
+                            eprintln!("conflicting nogood: {:?}", current_watch_list.nogood);
+                            return PropagationResult::Conflict(current_watch_list.nogood.clone());
                         }
-                        Some(p) => {
-                            if current_watch_list.nogood[current_watch_list.left_watch] == p {
-                                current_watch_list.left_watch += 1;
-                            }
-                            if current_watch_list.nogood[current_watch_list.right_watch] == p {
-                                current_watch_list.right_watch -= 1;
-                            }
-
-                            if current_watch_list.left_watch > current_watch_list.right_watch {
-                                eprintln!("conflicting nogood: {:?}", current_watch_list.nogood);
-                                return PropagationResult::Conflict(
-                                    current_watch_list.nogood.clone(),
-                                );
-                            }
-
-                            continue;
+                        let res = res.negate();
+                        if !self.assignments.contains(&res) {
+                            eprintln!("infer: {:?}", res);
+                            self.assignments.push(res);
+                            propagation_queue.push_back(res);
+                            self.derivations
+                                .insert(res, (Some(index), self.decision_level));
+                            break;
                         }
                     }
-                };
-                match prop_res {
-                    PropagationResult::Ok => {
-                        // next watch list
-                        wl_index += 1;
-                    }
-                    PropagationResult::Unfinished => {
-                        // start again
-                        wl_index = 0;
-                    }
-                    PropagationResult::Conflict(_) => unreachable!(),
                 }
             } else {
+                for (wl_index, current_watch_list) in self.watch_lists.iter().enumerate() {
+                    if current_watch_list.left_watch == current_watch_list.right_watch {
+                        let res = current_watch_list.nogood[current_watch_list.right_watch - 1];
+                        if self.assignments.contains(&res) {
+                            eprintln!("conflicting nogood: {:?}", current_watch_list.nogood);
+                            return PropagationResult::Conflict(current_watch_list.nogood.clone());
+                        }
+                        let res = res.negate();
+                        if !self.assignments.contains(&res) {
+                            eprintln!("infer: {:?}", res);
+                            self.assignments.push(res);
+                            propagation_queue.push_back(res);
+                            self.derivations
+                                .insert(res, (Some(wl_index), self.decision_level));
+
+                            break;
+                        }
+                    }
+                }
+            }
+            if propagation_queue.is_empty() {
                 return PropagationResult::Ok;
             }
         }
     }
-
-    // /// Unit propagation is the core mechanism of the solving algorithm.
-    // /// CF <https://github.com/dart-lang/pub/blob/master/doc/solver.md#unit-propagation>
-    // pub fn unit_propagation(&mut self, package: P) -> Result<(), PubGrubError<P, V>> {
-    //     self.unit_propagation_buffer.clear();
-    //     self.unit_propagation_buffer.push(package);
-    //     while let Some(current_package) = self.unit_propagation_buffer.pop() {
-    //         // Iterate over incompatibilities in reverse order
-    //         // to evaluate first the newest incompatibilities.
-    //         let mut conflict_id = None;
-    //         // We only care about incompatibilities if it contains the current package.
-    //         for &incompat_id in self.incompatibilities[&current_package].iter().rev() {
-    //             if self.contradicted_incompatibilities.contains(&incompat_id) {
-    //                 continue;
-    //             }
-    //             let current_incompat = &self.incompatibility_store[incompat_id];
-    //             match self.partial_solution.relation(current_incompat) {
-    //                 // If the partial solution satisfies the incompatibility
-    //                 // we must perform conflict resolution.
-    //                 Relation::Satisfied => {
-    //                     conflict_id = Some(incompat_id);
-    //                     break;
-    //                 }
-    //                 Relation::AlmostSatisfied(package_almost) => {
-    //                     self.unit_propagation_buffer.push(package_almost.clone());
-    //                     // Add (not term) to the partial solution with incompat as cause.
-    //                     self.partial_solution.add_derivation(
-    //                         package_almost,
-    //                         incompat_id,
-    //                         &self.incompatibility_store,
-    //                     );
-    //                     // With the partial solution updated, the incompatibility is now contradicted.
-    //                     self.contradicted_incompatibilities.insert(incompat_id);
-    //                 }
-    //                 Relation::Contradicted(_) => {
-    //                     self.contradicted_incompatibilities.insert(incompat_id);
-    //                 }
-    //                 _ => {}
-    //             }
-    //         }
-    //         if let Some(incompat_id) = conflict_id {
-    //             let (package_almost, root_cause) = self.conflict_resolution(incompat_id)?;
-    //             self.unit_propagation_buffer.clear();
-    //             self.unit_propagation_buffer.push(package_almost.clone());
-    //             // Add to the partial solution with incompat as cause.
-    //             self.partial_solution.add_derivation(
-    //                 package_almost,
-    //                 root_cause,
-    //                 &self.incompatibility_store,
-    //             );
-    //             // After conflict resolution and the partial solution update,
-    //             // the root cause incompatibility is now contradicted.
-    //             self.contradicted_incompatibilities.insert(root_cause);
-    //         }
-    //     }
-    //     // If there are no more changed packages, unit propagation is done.
-    //     Ok(())
-    // }
 }
 
 fn resolve(nogood: &[Literal], sigma: &Literal, reason: &[Literal]) -> Clause {
@@ -565,4 +486,61 @@ fn test_unit_propagation_conflict() {
 
         assert_eq!(solver.assignment_complete(), true);
     }
+}
+
+#[test]
+pub fn test_solve1() {
+    let mut solver = Solver {
+        tight: true,
+        number_of_variables: 3,
+        assignments: vec![],
+        decisions: vec![],
+        watch_lists: vec![],
+        nogoods: vec![
+            vec![Literal(1), Literal(-2)],
+            vec![Literal(2), Literal(-3)],
+            vec![Literal(3), Literal(2)],
+        ],
+        decision_level: 0,
+        chronological_backtracking_level: 0,
+        derivations: Map::default(),
+    };
+
+    let mut solutions = solver.solve();
+    let res = solutions.next();
+    assert_eq!(
+        res,
+        Some(SolveResult::Sat(vec![Literal(-2), Literal(-1), Literal(3)]))
+    );
+    let res = solutions.next();
+    assert_eq!(
+        res,
+        Some(SolveResult::Sat(vec![
+            Literal(-3),
+            Literal(-1),
+            Literal(-2)
+        ]))
+    );
+    let res = solutions.next();
+    assert_eq!(res, None);
+}
+#[test]
+pub fn test_solve_unsat() {
+    let mut solver = Solver {
+        tight: true,
+        number_of_variables: 1,
+        assignments: vec![],
+        decisions: vec![],
+        watch_lists: vec![],
+        nogoods: vec![vec![Literal(1)], vec![Literal(-1)]],
+        decision_level: 0,
+        chronological_backtracking_level: 0,
+        derivations: Map::default(),
+    };
+
+    let mut solutions = solver.solve();
+    let res = solutions.next();
+    assert_eq!(res, Some(SolveResult::UnSat));
+    let res = solutions.next();
+    assert_eq!(res, None);
 }

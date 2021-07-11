@@ -18,9 +18,21 @@ pub fn main() {
         derivations: Map::default(),
     };
 
-    let solutions = solver.solve();
+    let mut solutions = solver.solve().enumerate();
 
-    for solution in solutions {
-        println!("{:?}", solution);
+    loop {
+        if let Some((c, res)) = solutions.next() {
+            match res {
+                SolveResult::Sat(assignments) => {
+                    println!("Solution {}: {:?}", c, assignments);
+                }
+                SolveResult::UnSat => {
+                    println!("UNSAT");
+                }
+            }
+        } else {
+            println!("EXHAUSTED");
+            break;
+        }
     }
 }
