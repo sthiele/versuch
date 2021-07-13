@@ -4,20 +4,28 @@ use std::usize;
 use genawaiter::sync::Gen;
 
 #[derive(Copy, Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
-pub struct Literal(pub(crate) i32);
-
+pub struct Literal {
+    pub(crate) id: usize,
+    pub(crate) sign: bool,
+}
 impl Literal {
     fn id(&self) -> usize {
-        self.0.unsigned_abs() as usize
+        self.id
+    }
+    pub fn sign(&self) -> bool {
+        self.sign
     }
     pub fn negate(&self) -> Literal {
-        Literal(-self.0)
+        Literal {
+            id: self.id,
+            sign: !self.sign,
+        }
     }
 }
 
 #[test]
 fn test_id() {
-    let lit = Literal(-2);
+    let lit = Literal { id: 2, sign: false };
     assert_eq!(lit.id(), 2);
 }
 
@@ -27,10 +35,16 @@ fn test_id() {
 pub(crate) struct WatchList {
     left_watch: usize,
     right_watch: usize,
-    nogood: Vec<Literal>,
 }
 
-type Clause = Vec<Literal>;
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum Bla {
+    True,
+    False,
+    Nothing,
+}
+// type Clause = Vec<Literal>;
+type Clause = Vec<Bla>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SolveResult {
@@ -59,19 +73,30 @@ impl Builder {
         let mut number_of_variables = 0;
         for clause in &self.nogoods {
             for lit in clause {
-                if lit.id() > number_of_variables {
-                    number_of_variables = lit.id();
+                if lit.id() + 1 > number_of_variables {
+                    number_of_variables = lit.id() + 1;
                 }
             }
         }
-
+        let mut solver_nogoods = vec![];
+        for clause in self.nogoods {
+            let mut solver_clause = vec![Bla::Nothing; number_of_variables];
+            for id in 0..number_of_variables {
+                if clause.contains(&Literal { id, sign: true }) {
+                    solver_clause[id] = Bla::True;
+                } else if clause.contains(&Literal { id, sign: false }) {
+                    solver_clause[id] = Bla::False;
+                }
+            }
+            solver_nogoods.push(solver_clause);
+        }
         Solver {
             tight: true,
             number_of_variables,
             assignments: vec![],
             decisions: vec![],
             watch_lists: vec![],
-            nogoods: self.nogoods,
+            nogoods: solver_nogoods,
             decision_level: 0,
             chronological_backtracking_level: 0,
             derivations: Map::default(),
@@ -169,60 +194,155 @@ impl Solver {
     fn create_watch_lists(&mut self) {
         self.watch_lists.clear();
         for nogood in &self.nogoods {
+            eprintln!("nogood: {:?}", nogood);
             //  TODO: special handling for nogoods of size 1
+            let mut left_watch = 0;
+            while nogood[left_watch] == Bla::Nothing {
+                left_watch += 1;
+            }
+            let mut right_watch = nogood.len() - 1;
+            while nogood[right_watch] == Bla::Nothing {
+                right_watch -= 1;
+            }
             self.watch_lists.push(WatchList {
-                left_watch: 1,
-                right_watch: nogood.len(),
-                nogood: nogood.clone(),
+                left_watch,
+                right_watch,
             })
         }
     }
 
     /// analyze conflict and learn UIP nogood
-    fn conflict_resolution(&self, nogood: &[Literal]) -> (Clause, Literal, usize) {
+    fn conflict_resolution(&self, nogood: &[Bla]) -> (Clause, Literal, usize) {
         let mut nogood = nogood.to_owned();
         let sigma = loop {
-            // eprintln!("delta:{:?}", nogood);
-            let sigma = nogood[0];
-            let (nogood_index, decision_level_sigma) = self.derivations.get(&sigma).unwrap();
+            eprintln!("delta:{:?}", nogood);
+            let mut iter = nogood.iter().enumerate();
+            let (sigma, nogood_index, decision_level_sigma) = loop {
+                // let mut last: Literal;
+                match iter.next() {
+                    Some((id, &Bla::True)) => {
+                        let literal = Literal { id, sign: true };
+                        if let (Some(index), decision_level) =
+                            self.derivations.get(&literal).unwrap()
+                        {
+                            break (literal, Some(index), decision_level);
+                        }
+                    }
+                    Some((id, &Bla::False)) => {
+                        let literal = Literal { id, sign: false };
+                        if let (Some(index), decision_level) =
+                            self.derivations.get(&literal).unwrap()
+                        {
+                            break (literal, Some(index), decision_level);
+                        }
+                    }
+                    Some((_, &Bla::Nothing)) => {}
+                    None => {
+                        //no good contains only decision literals
+                        iter = nogood.iter().enumerate();
+                        let res: (Literal, Option<&usize>, &usize) = loop {
+                            match iter.next() {
+                                Some((id, &Bla::True)) => {
+                                    let literal = Literal { id, sign: true };
+                                    if let (None, decision_level) =
+                                        self.derivations.get(&literal).unwrap()
+                                    {
+                                        break (literal, None, decision_level);
+                                    }
+                                }
+                                Some((id, &Bla::False)) => {
+                                    let literal = Literal { id, sign: false };
+                                    if let (None, decision_level) =
+                                        self.derivations.get(&literal).unwrap()
+                                    {
+                                        break (literal, None, decision_level);
+                                    }
+                                }
+                                Some((_, &Bla::Nothing)) => {}
+                                None => {
+                                    unreachable!()
+                                }
+                            }
+                        };
+                        break res;
+                    }
+                }
+            };
+            eprintln!("sigma: {:?}", sigma);
+
+            if let None = nogood_index {
+                // sigma is a decision_literal all other literals are also decision lit
+                eprintln!("should be uip")
+            }
 
             // a nogood is a unique implication point if there is no other literal
             // from the same decision level as sigma
-            let mut iter = nogood.iter();
+            let mut iter = nogood.iter().enumerate();
             let unique = loop {
-                if let Some(literal) = iter.next() {
-                    if *literal != sigma {
-                        let (_, decision_level) = self.derivations.get(literal).unwrap();
-                        if decision_level == decision_level_sigma {
-                            break false;
+                match iter.next() {
+                    Some((id, &Bla::True)) => {
+                        let literal = Literal { id, sign: true };
+                        if sigma != literal {
+                            eprintln!("literal: {:?}", literal);
+                            let (_, decision_level) = self.derivations.get(&literal).unwrap();
+                            if decision_level == decision_level_sigma {
+                                break false;
+                            }
                         }
                     }
-                } else {
-                    break true;
+                    Some((id, &Bla::False)) => {
+                        let literal = Literal { id, sign: false };
+                        if sigma != literal {
+                            let (_, decision_level) = self.derivations.get(&literal).unwrap();
+                            if decision_level == decision_level_sigma {
+                                break false;
+                            }
+                        }
+                    }
+                    Some((_, &Bla::Nothing)) => {}
+                    None => break true,
                 }
             };
             if unique {
                 break sigma;
             }
-
-            if let Some(index) = nogood_index {
-                let reason = &self.nogoods[*index];
+            eprintln!("not unique");
+            if let Some(nogood_index) = nogood_index {
+                let reason = &self.nogoods[*nogood_index];
+                eprintln!("reason: {:?}", reason);
                 let res = resolve(&nogood, &sigma, reason);
-                // eprintln!("res: {:?}", &res);
                 nogood = res;
             } else {
-                // There is always a reason
-                // TODO: double check this
-                unreachable!();
+                // sigma is a decision_literals
+                // the reason is empty
+                let reason = vec![Bla::Nothing; self.number_of_variables];
+                eprintln!("reason: {:?}", reason);
+                let res = resolve(&nogood, &sigma, &reason);
+                nogood = res;
             }
         };
         let mut k = 0;
-        for lit in &nogood {
-            if *lit != sigma {
-                let (_id, decision_level) = self.derivations.get(lit).unwrap();
-                if *decision_level > k {
-                    k = *decision_level
+        for (id, bla) in nogood.iter().enumerate() {
+            match bla {
+                Bla::True => {
+                    let literal = Literal { id, sign: true };
+                    if literal != sigma {
+                        let (_, decision_level) = self.derivations.get(&literal).unwrap();
+                        if *decision_level > k {
+                            k = *decision_level
+                        }
+                    }
                 }
+                Bla::False => {
+                    let literal = Literal { id, sign: false };
+                    if literal != sigma {
+                        let (_, decision_level) = self.derivations.get(&literal).unwrap();
+                        if *decision_level > k {
+                            k = *decision_level
+                        }
+                    }
+                }
+                Bla::Nothing => {}
             }
         }
         eprintln!("k: {}", k);
@@ -242,25 +362,25 @@ impl Solver {
     }
 
     fn choose(&self) -> Literal {
-        for index in 1..self.number_of_variables + 1 {
-            if self.assignments.contains(&Literal(index as i32)) {
+        for id in 0..self.number_of_variables {
+            if self.assignments.contains(&Literal { id, sign: true }) {
                 continue;
             }
-            if self.assignments.contains(&Literal(-(index as i32))) {
+            if self.assignments.contains(&Literal { id, sign: false }) {
                 continue;
             }
-            return Literal(index as i32);
+            return Literal { id, sign: true };
         }
         panic!("Logic error: calling choose on complete assignment-");
     }
 
     /// return true if all variables have a truth value assignment
     fn assignment_complete(&self) -> bool {
-        for index in 1..self.number_of_variables + 1 {
-            if self.assignments.contains(&Literal(index as i32)) {
+        for id in 0..self.number_of_variables {
+            if self.assignments.contains(&Literal { id, sign: true }) {
                 continue;
             }
-            if self.assignments.contains(&Literal(-(index as i32))) {
+            if self.assignments.contains(&Literal { id, sign: false }) {
                 continue;
             }
             return false;
@@ -268,11 +388,24 @@ impl Solver {
         true
     }
     /// return true if there is a conflich on decision level 0
-    fn is_top_level_conflict(&self, nogood: &[Literal]) -> bool {
-        for literal in nogood {
-            let (_id, decision_level) = self.derivations.get(literal).unwrap();
-            if *decision_level > 0 {
-                return false;
+    fn is_top_level_conflict(&self, nogood: &[Bla]) -> bool {
+        for (id, assignment) in nogood.iter().enumerate() {
+            match assignment {
+                Bla::True => {
+                    let literal = Literal { id, sign: true };
+                    let (_id, decision_level) = self.derivations.get(&literal).unwrap();
+                    if *decision_level > 0 {
+                        return false;
+                    }
+                }
+                Bla::False => {
+                    let literal = Literal { id, sign: false };
+                    let (_id, decision_level) = self.derivations.get(&literal).unwrap();
+                    if *decision_level > 0 {
+                        return false;
+                    }
+                }
+                Bla::Nothing => {}
             }
         }
         true
@@ -337,23 +470,57 @@ impl Solver {
 
         loop {
             if let Some(p) = propagation_queue.pop_front() {
-                for (index, current_watch_list) in self.watch_lists.iter_mut().enumerate() {
-                    if current_watch_list.nogood[current_watch_list.left_watch - 1] == p {
-                        current_watch_list.left_watch += 1;
+                eprintln!("prp: {:?}", p);
+                for (index, watch_list) in self.watch_lists.iter_mut().enumerate() {
+                    // eprintln!("index:{}",index);
+                    eprintln!(
+                        "ng: {} {} {:?}",
+                        watch_list.left_watch, watch_list.right_watch, self.nogoods[index]
+                    );
+                    if watch_list.left_watch == p.id() {
+                        if p.sign() == true
+                            && self.nogoods[index][watch_list.left_watch] == Bla::True
+                        {
+                            watch_list.left_watch += 1;
+                        }
+                        if p.sign() == false
+                            && self.nogoods[index][watch_list.left_watch] == Bla::False
+                        {
+                            watch_list.left_watch += 1;
+                        }
                     }
-                    if current_watch_list.nogood[current_watch_list.right_watch - 1] == p {
-                        current_watch_list.right_watch -= 1;
+                    if watch_list.right_watch == p.id() {
+                        if p.sign() == true
+                            && self.nogoods[index][watch_list.right_watch] == Bla::True
+                        {
+                            watch_list.right_watch -= 1;
+                        }
+                        if p.sign() == false
+                            && self.nogoods[index][watch_list.right_watch] == Bla::False
+                        {
+                            watch_list.right_watch -= 1;
+                        }
                     }
 
-                    if current_watch_list.left_watch > current_watch_list.right_watch {
-                        eprintln!("conflicting nogood: {:?}", current_watch_list.nogood);
-                        return PropagationResult::Conflict(current_watch_list.nogood.clone());
+                    if watch_list.left_watch > watch_list.right_watch {
+                        eprintln!("conflicting nogood: {:?}", self.nogoods[index]);
+                        return PropagationResult::Conflict(self.nogoods[index].clone());
                     }
-                    if current_watch_list.left_watch == current_watch_list.right_watch {
-                        let res = current_watch_list.nogood[current_watch_list.right_watch - 1];
+                    if watch_list.left_watch == watch_list.right_watch {
+                        let res = match self.nogoods[index][watch_list.right_watch] {
+                            Bla::True => Literal {
+                                id: watch_list.right_watch,
+                                sign: true,
+                            },
+                            Bla::False => Literal {
+                                id: watch_list.right_watch,
+                                sign: false,
+                            },
+                            _ => unreachable!(),
+                        };
                         if self.assignments.contains(&res) {
-                            eprintln!("conflicting nogood: {:?}", current_watch_list.nogood);
-                            return PropagationResult::Conflict(current_watch_list.nogood.clone());
+                            eprintln!("conflicting nogood: {:?}", self.nogoods[index]);
+                            return PropagationResult::Conflict(self.nogoods[index].clone());
                         }
                         let res = res.negate();
                         if !self.assignments.contains(&res) {
@@ -367,12 +534,23 @@ impl Solver {
                     }
                 }
             } else {
-                for (wl_index, current_watch_list) in self.watch_lists.iter().enumerate() {
-                    if current_watch_list.left_watch == current_watch_list.right_watch {
-                        let res = current_watch_list.nogood[current_watch_list.right_watch - 1];
+                for (index, watch_list) in self.watch_lists.iter().enumerate() {
+                    // eprintln!("index:{}",index);
+                    if watch_list.left_watch == watch_list.right_watch {
+                        let res = match self.nogoods[index][watch_list.right_watch] {
+                            Bla::True => Literal {
+                                id: watch_list.right_watch,
+                                sign: true,
+                            },
+                            Bla::False => Literal {
+                                id: watch_list.right_watch,
+                                sign: false,
+                            },
+                            _ => unreachable!(),
+                        };
                         if self.assignments.contains(&res) {
-                            eprintln!("conflicting nogood: {:?}", current_watch_list.nogood);
-                            return PropagationResult::Conflict(current_watch_list.nogood.clone());
+                            eprintln!("conflicting nogood: {:?}", self.nogoods[index]);
+                            return PropagationResult::Conflict(self.nogoods[index].clone());
                         }
                         let res = res.negate();
                         if !self.assignments.contains(&res) {
@@ -380,7 +558,7 @@ impl Solver {
                             self.assignments.push(res);
                             propagation_queue.push_back(res);
                             self.derivations
-                                .insert(res, (Some(wl_index), self.decision_level));
+                                .insert(res, (Some(index), self.decision_level));
 
                             break;
                         }
@@ -394,22 +572,48 @@ impl Solver {
     }
 }
 
-fn resolve(nogood: &[Literal], sigma: &Literal, reason: &[Literal]) -> Clause {
+fn resolve(nogood: &[Bla], sigma: &Literal, reason: &[Bla]) -> Clause {
     // assert sigma in nogood and reason
     let mut res = vec![];
-    for lit in nogood {
-        if *lit != *sigma {
-            res.push(*lit)
+    for (id, bla) in nogood.iter().enumerate() {
+        match bla {
+            Bla::True => {
+                let literal = Literal { id, sign: true };
+                if literal != *sigma {
+                    res.push(Bla::True)
+                } else {
+                    res.push(Bla::Nothing)
+                }
+            }
+            Bla::False => {
+                let literal = Literal { id, sign: false };
+                if literal != *sigma {
+                    res.push(Bla::False)
+                } else {
+                    res.push(Bla::Nothing)
+                }
+            }
+            Bla::Nothing => res.push(Bla::Nothing),
         }
     }
     let neg_sigma = sigma.negate();
-    for lit in reason {
-        if *lit != neg_sigma {
-            res.push(*lit)
+    for (id, bla) in reason.iter().enumerate() {
+        match bla {
+            Bla::True => {
+                let literal = Literal { id, sign: true };
+                if literal != neg_sigma {
+                    res[id] = Bla::True;
+                }
+            }
+            Bla::False => {
+                let literal = Literal { id, sign: false };
+                if literal != neg_sigma {
+                    res[id] = Bla::False;
+                }
+            }
+            Bla::Nothing => {}
         }
     }
-    res.sort();
-    res.dedup();
     res
 }
 
@@ -418,10 +622,10 @@ fn test_unit_propagation() {
     let mut solver = Solver {
         tight: true,
         number_of_variables: 3,
-        assignments: vec![Literal(1)],
-        decisions: vec![Literal(1)],
+        assignments: vec![Literal { id: 1, sign: true }],
+        decisions: vec![Literal { id: 1, sign: true }],
         watch_lists: vec![],
-        nogoods: vec![vec![Literal(1), Literal(-2)]],
+        nogoods: vec![vec![Bla::Nothing, Bla::True, Bla::False]],
         decision_level: 0,
         chronological_backtracking_level: 0,
         derivations: Map::default(),
@@ -429,13 +633,16 @@ fn test_unit_propagation() {
     solver.create_watch_lists();
     solver.unit_propagation();
     let res = &solver.assignments;
-    assert_eq!(*res, vec![Literal(1), Literal(2)]);
+    assert_eq!(
+        *res,
+        vec![Literal { id: 1, sign: true }, Literal { id: 2, sign: true }]
+    );
 }
 
 /// only for testing
 fn mock_decide(solver: &mut Solver) {
     solver.decision_level += 1;
-    let decision_literal = Literal(1);
+    let decision_literal = Literal { id: 0, sign: true };
     solver.assignments.push(decision_literal);
     solver
         .derivations
@@ -445,7 +652,7 @@ fn mock_decide(solver: &mut Solver) {
 /// only for testing
 fn mock_decide2(solver: &mut Solver) {
     solver.decision_level += 1;
-    let decision_literal = Literal(3);
+    let decision_literal = Literal { id: 2, sign: true };
     solver.assignments.push(decision_literal);
     solver
         .derivations
@@ -454,31 +661,31 @@ fn mock_decide2(solver: &mut Solver) {
 
 #[test]
 fn test_unit_propagation_conflict() {
-    let mut solver = Solver {
-        tight: true,
-        number_of_variables: 3,
-        assignments: vec![],
-        decisions: vec![],
-        watch_lists: vec![],
+    let builder = Builder {
         nogoods: vec![
-            vec![Literal(1), Literal(-2)],
-            vec![Literal(2), Literal(-3)],
-            vec![Literal(3), Literal(2)],
+            vec![
+                Literal { id: 0, sign: true },
+                Literal { id: 1, sign: false },
+            ],
+            vec![
+                Literal { id: 1, sign: true },
+                Literal { id: 2, sign: false },
+            ],
+            vec![Literal { id: 1, sign: true }, Literal { id: 2, sign: true }],
         ],
-        decision_level: 0,
-        chronological_backtracking_level: 0,
-        derivations: Map::default(),
     };
-    mock_decide(&mut solver); // assign Literal(1)
+    let mut solver = builder.build();
+
+    mock_decide(&mut solver); // assign Literal(0)
     solver.create_watch_lists();
     let prop_result = solver.unit_propagation();
     if let PropagationResult::Conflict(nogood) = prop_result {
-        assert_eq!(nogood, vec![Literal(3), Literal(2)]);
+        assert_eq!(nogood, vec![Bla::Nothing, Bla::True, Bla::True]);
         let top_level_conflict = solver.is_top_level_conflict(&nogood);
         assert_eq!(top_level_conflict, false);
         let (uip, sigma, k) = solver.conflict_resolution(&nogood);
-        assert_eq!(uip, vec![Literal(2)]);
-        assert_eq!(sigma, Literal(2));
+        assert_eq!(uip, vec![Bla::True, Bla::Nothing, Bla::Nothing]);
+        assert_eq!(sigma, Literal { id: 0, sign: true });
         if solver.chronological_backtracking_level > k {
             solver.decision_level = solver.chronological_backtracking_level;
         } else {
@@ -497,15 +704,19 @@ fn test_unit_propagation_conflict() {
 
         let res = solver.unit_propagation();
         assert_eq!(res, PropagationResult::Ok);
-        assert_eq!(solver.assignments, vec![Literal(-2), Literal(-1)]);
+        assert_eq!(solver.assignments, vec![Literal { id: 0, sign: false }]);
 
-        mock_decide2(&mut solver); // assign Literal(3)
+        mock_decide2(&mut solver); // assign Literal(2)
 
         let res = solver.unit_propagation();
         assert_eq!(res, PropagationResult::Ok);
         assert_eq!(
             solver.assignments,
-            vec![Literal(-2), Literal(-1), Literal(3)]
+            vec![
+                Literal { id: 0, sign: false },
+                Literal { id: 2, sign: true },
+                Literal { id: 1, sign: false }
+            ]
         );
 
         assert_eq!(solver.assignment_complete(), true);
@@ -514,53 +725,68 @@ fn test_unit_propagation_conflict() {
 
 #[test]
 pub fn test_solve1() {
-    let mut solver = Solver {
-        tight: true,
-        number_of_variables: 3,
-        assignments: vec![],
-        decisions: vec![],
-        watch_lists: vec![],
+    let builder = Builder {
         nogoods: vec![
-            vec![Literal(1), Literal(-2)],
-            vec![Literal(2), Literal(-3)],
-            vec![Literal(3), Literal(2)],
+            vec![
+                Literal { id: 0, sign: true },
+                Literal { id: 1, sign: false },
+            ],
+            vec![
+                Literal { id: 1, sign: true },
+                Literal { id: 2, sign: false },
+            ],
+            vec![Literal { id: 1, sign: true }, Literal { id: 2, sign: true }],
         ],
-        decision_level: 0,
-        chronological_backtracking_level: 0,
-        derivations: Map::default(),
     };
+    let mut solver = builder.build();
 
     let mut solutions = solver.solve();
     let res = solutions.next();
     assert_eq!(
         res,
-        Some(SolveResult::Sat(vec![Literal(-2), Literal(-1), Literal(3)]))
+        Some(SolveResult::Sat(vec![
+            Literal { id: 1, sign: false },
+            Literal { id: 0, sign: false },
+            Literal { id: 2, sign: true }
+        ]))
     );
     let res = solutions.next();
     assert_eq!(
         res,
         Some(SolveResult::Sat(vec![
-            Literal(-3),
-            Literal(-1),
-            Literal(-2)
+            Literal { id: 2, sign: false },
+            Literal { id: 0, sign: false },
+            Literal { id: 1, sign: false }
         ]))
     );
     let res = solutions.next();
     assert_eq!(res, None);
 }
 #[test]
-pub fn test_solve_unsat() {
-    let mut solver = Solver {
-        tight: true,
-        number_of_variables: 1,
-        assignments: vec![],
-        decisions: vec![],
-        watch_lists: vec![],
-        nogoods: vec![vec![Literal(1)], vec![Literal(-1)]],
-        decision_level: 0,
-        chronological_backtracking_level: 0,
-        derivations: Map::default(),
+pub fn test_solve_unsat_1() {
+    let builder = Builder {
+        nogoods: vec![
+            vec![Literal { id: 0, sign: true }],
+            vec![Literal { id: 0, sign: false }],
+        ],
     };
+    let mut solver = builder.build();
+
+    let mut solutions = solver.solve();
+    let res = solutions.next();
+    assert_eq!(res, Some(SolveResult::UnSat));
+    let res = solutions.next();
+    assert_eq!(res, None);
+}
+#[test]
+pub fn test_solve_unsat_2() {
+    let builder = Builder {
+        nogoods: vec![
+            vec![Literal { id: 1, sign: true }],
+            vec![Literal { id: 1, sign: false }],
+        ],
+    };
+    let mut solver = builder.build();
 
     let mut solutions = solver.solve();
     let res = solutions.next();
