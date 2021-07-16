@@ -171,9 +171,7 @@ impl Solver {
                         // add complement of sigma
                         self.assignments[sigma.id] = Some(!sigma.sign);
                         self.assignments_log[sigma.id] = (Some(!sigma.sign), None, k);
-
-                        self.watch_lists.push(nogood_to_watch_list(&uip));
-                        self.nogoods.push(uip); // TODO: book keeping about learned nogoods
+                        self.record_nogood(uip);
                     } else {
                         //get decision literal from this decision_level
                         let decision_literal = self.decisions[self.decision_level - 1];
@@ -195,7 +193,7 @@ impl Solver {
                     } else {
                         // get decision literal from this decision_level
                         let decision_literal = self.decisions[self.decision_level - 1];
-                        eprintln!("backtrack decision literal {:?}", decision_literal);
+                        // eprintln!("flip decision literal {:?}", decision_literal);
                         self.decision_level -= 1;
                         eprintln!("decision_level: {}", self.decision_level);
                         self.chronological_backtracking_level = self.decision_level;
@@ -219,11 +217,24 @@ impl Solver {
         .into_iter()
     }
 
+    fn record_nogood(&mut self, nogood: Nogood) {
+        self.watch_lists.push(nogood_to_watch_list(&nogood));
+        self.nogoods.push(nogood);
+        let nogood_id = self.nogoods.len() - 1;
+        for variable_id in 0..self.number_of_variables {
+            if let Some(sign) = self.nogoods[nogood_id][variable_id] {
+                self.var_to_nogoods[variable_id].insert(nogood_id, sign);
+                self.nogoods_to_var.push(Map::default());
+                self.nogoods_to_var[nogood_id].insert(variable_id, sign);
+            }
+        }
+    }
+
     /// analyze conflict and learn UIP nogood
     fn conflict_resolution(&self, nogood: &[Option<bool>]) -> (Nogood, Literal, usize) {
         let mut nogood = nogood.to_owned();
         let sigma = loop {
-            eprintln!("delta: {:?}", nogood);
+            // eprintln!("delta: {:?}", nogood);
             let iter = nogood.iter().enumerate();
 
             // initialie sigma, nogood_index, decision_levl_sigma
@@ -245,7 +256,7 @@ impl Solver {
                     decision_level_sigma = decision_level;
                 }
             }
-            eprintln!("sigma: {:?}", sigma);
+            // eprintln!("sigma: {:?}", sigma);
 
             // a nogood is a unique implication point if there is no other literal
             // from the same decision level as sigma
@@ -255,7 +266,7 @@ impl Solver {
                     Some((id, &Some(sign))) => {
                         let literal = Literal { id, sign };
                         if sigma != literal {
-                            eprintln!("literal: {:?}", literal);
+                            // eprintln!("literal: {:?}", literal);
                             let (_, _, decision_level) = self.assignments_log[literal.id];
                             if decision_level == decision_level_sigma {
                                 break false;
@@ -269,17 +280,17 @@ impl Solver {
             if unique {
                 break sigma;
             }
-            eprintln!("not unique");
+            // eprintln!("not unique");
             if let Some(nogood_index) = nogood_index {
                 let reason = &self.nogoods[nogood_index];
-                eprintln!("reason: {:?}", reason);
+                // eprintln!("reason: {:?}", reason);
                 let res = resolve(&nogood, &sigma, reason);
                 nogood = res;
             } else {
                 // sigma is a decision_literals
                 // the reason is empty
                 let reason: Vec<Option<bool>> = vec![None; self.number_of_variables];
-                eprintln!("reason: {:?}", reason);
+                // eprintln!("reason: {:?}", reason);
                 let res = resolve(&nogood, &sigma, &reason);
                 nogood = res;
             }
@@ -296,8 +307,8 @@ impl Solver {
                 }
             }
         }
-        eprintln!("k: {}", k);
-        eprintln!("sigma: {:?}", sigma);
+        // eprintln!("k: {}", k);
+        // eprintln!("sigma: {:?}", sigma);
         (nogood, sigma, k)
     }
     /// increase decision level assign truth value to a previously unassigned variable
@@ -352,21 +363,16 @@ impl Solver {
     }
     /// backjump to decision level x and rewind assignment
     fn backjump(&mut self) {
-        eprintln!("backjump");
-        eprintln!("decision_level {}", self.decision_level);
-
+        // eprintln!("backjump to decision_level {}", self.decision_level);
         for (id, assignment) in self.assignments.iter_mut().enumerate() {
-            let lit = match *assignment {
-                Some(sign) => Literal { id, sign },
-                None => unreachable!(),
-            };
+            if let Some(sign) = *assignment {
+                let lit = Literal { id, sign };
+                let (_, _, decision_level) = self.assignments_log[lit.id];
 
-            let (_, _, decision_level) = self.assignments_log[lit.id];
-
-            if decision_level >= self.decision_level {
-                eprintln!("pop:{:?}", lit);
-                self.assignments_log[lit.id] = (None, None, 0);
-                *assignment = None;
+                if decision_level > self.decision_level {
+                    self.assignments_log[lit.id] = (None, None, 0);
+                    *assignment = None;
+                }
             }
         }
 
@@ -403,7 +409,7 @@ impl Solver {
 
         loop {
             if let Some(p) = propagation_queue.pop_front() {
-                eprintln!("propagate: {:?}", p);
+                // eprintln!("prp: {:?}", p);
 
                 for (index, sign) in &self.var_to_nogoods[p.id] {
                     let watch_list = &mut self.watch_lists[*index];
@@ -634,8 +640,7 @@ fn test_unit_propagation_conflict() {
         // add complement of sigma
         solver.assignments[sigma.id] = Some(!sigma.sign);
         solver.assignments_log[sigma.id] = (Some(!sigma.sign), None, k);
-        solver.watch_lists.push(nogood_to_watch_list(&uip));
-        solver.nogoods.push(uip);
+        solver.record_nogood(uip);
         let res = solver.unit_propagation();
         assert_eq!(res, PropagationResult::Ok);
         assert_eq!(solver.assignments, vec![Some(false), None, None]);

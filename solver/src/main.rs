@@ -23,7 +23,15 @@ pub fn main() {
         if let Some((c, res)) = solutions.next() {
             match res {
                 SolveResult::Sat(assignments) => {
-                    println!("Solution {}: {:?}", c + 1, assignments);
+                    print!("Solution {}: ", c + 1);
+                    for (id, e) in assignments.iter().enumerate() {
+                        match e {
+                            Some(true) => print!("{} ", id),
+                            Some(false) => print!("~{} ", id),
+                            None => {}
+                        }
+                    }
+                    println!();
                 }
                 SolveResult::UnSat => {
                     println!("UNSAT");
