@@ -5,11 +5,11 @@ use genawaiter::sync::Gen;
 
 #[derive(Copy, Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct Literal {
-    pub(crate) id: usize,
-    pub(crate) sign: bool,
+    pub id: usize,
+    pub sign: bool,
 }
 impl Literal {
-    fn id(&self) -> usize {
+    pub(crate) fn id(&self) -> usize {
         self.id
     }
     pub fn sign(&self) -> bool {
@@ -33,8 +33,8 @@ fn test_id() {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct WatchList {
-    first_watch: usize,
-    second_watch: usize,
+    pub(crate) first_watch: usize,
+    pub(crate) second_watch: usize,
 }
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Watch {
@@ -49,11 +49,6 @@ pub enum SolveResult {
     UnSat,
     Sat(Vec<Option<bool>>),
 }
-//type Assignments = Vec<Option<bool>>
-// pub enum SolveResult<'a> {
-//     UnSat,
-//     Sat(&'a Assignments),
-// }
 
 #[derive(Clone, Debug, PartialEq)]
 enum PropagationResult {
@@ -61,91 +56,21 @@ enum PropagationResult {
     Conflict(Nogood),
 }
 /// Map implementation used by the library.
-pub type Map<K, V> = rustc_hash::FxHashMap<K, V>;
+pub(crate) type Map<K, V> = rustc_hash::FxHashMap<K, V>;
 
-pub struct Builder {
-    pub(crate) nogoods: Vec<Vec<Literal>>,
-}
-impl Builder {
-    pub fn build(self) -> Solver {
-        let mut number_of_variables = 0;
-        for nogood in &self.nogoods {
-            for lit in nogood {
-                if lit.id() + 1 > number_of_variables {
-                    number_of_variables = lit.id() + 1;
-                }
-            }
-        }
-        let mut solver_nogoods = vec![];
-        for nogood in self.nogoods {
-            let mut solver_nogood = vec![None; number_of_variables];
-            for id in 0..number_of_variables {
-                if nogood.contains(&Literal { id, sign: true }) {
-                    solver_nogood[id] = Some(true);
-                } else if nogood.contains(&Literal { id, sign: false }) {
-                    solver_nogood[id] = Some(false);
-                }
-            }
-            solver_nogoods.push(solver_nogood);
-        }
-
-        let mut watch_lists = vec![];
-        for nogood in &solver_nogoods {
-            eprintln!("nogood: {:?}", nogood);
-            //  TODO: special handling for nogoods of size 1
-            let mut left_watch = 0;
-            while nogood[left_watch] == None {
-                left_watch += 1;
-            }
-            let mut right_watch = nogood.len() - 1;
-            while nogood[right_watch] == None {
-                right_watch -= 1;
-            }
-            watch_lists.push(WatchList {
-                first_watch: left_watch,
-                second_watch: right_watch,
-            })
-        }
-
-        let mut var_to_nogoods: Vec<Map<usize, bool>> = vec![Map::default(); number_of_variables];
-        let mut nogoods_to_var: Vec<Map<usize, bool>> = vec![Map::default(); solver_nogoods.len()];
-        for nogood_id in 0..solver_nogoods.len() {
-            for variable_id in 0..number_of_variables {
-                if let Some(sign) = solver_nogoods[nogood_id][variable_id] {
-                    var_to_nogoods[variable_id].insert(nogood_id, sign);
-                    nogoods_to_var[nogood_id].insert(variable_id, sign);
-                }
-            }
-        }
-
-        Solver {
-            tight: true,
-            number_of_variables,
-            assignments: vec![None; number_of_variables],
-            decisions: vec![],
-            watch_lists,
-            nogoods: solver_nogoods,
-            var_to_nogoods,
-            nogoods_to_var,
-            decision_level: 0,
-            assignments_log: vec![(None, None, 0); number_of_variables],
-            chronological_backtracking_level: 0,
-        }
-    }
-}
 #[derive(Clone, Debug)]
 pub struct Solver {
-    tight: bool,
-    number_of_variables: usize,
-    assignments: Vec<Option<bool>>,
-    decisions: Vec<Literal>,
-    watch_lists: Vec<WatchList>,
-    nogoods: Vec<Nogood>,
-    var_to_nogoods: Vec<Map<usize, bool>>,
-    nogoods_to_var: Vec<Map<usize, bool>>,
-    decision_level: usize,
-    assignments_log: Vec<(Option<bool>, Option<usize>, usize)>,
-    chronological_backtracking_level: usize,
+    pub(crate) tight: bool,
+    pub(crate) number_of_variables: usize,
+    pub(crate) assignments: Vec<Option<bool>>,
+    pub(crate) decisions: Vec<Literal>,
+    pub(crate) watch_lists: Vec<WatchList>,
+    pub(crate) nogoods: Vec<Nogood>,
+    pub(crate) var_to_nogoods: Vec<Map<usize, bool>>,
+    pub(crate) nogoods_to_var: Vec<Map<usize, bool>>,
+    pub(crate) decision_level: usize,
+    pub(crate) assignments_log: Vec<(Option<bool>, Option<usize>, usize)>,
+    pub(crate) chronological_backtracking_level: usize,
 }
 impl Solver {
     pub fn solve(&mut self) -> impl Iterator<Item = SolveResult> + '_ {
@@ -605,6 +530,7 @@ fn test_unit_propagation() {
 
 #[test]
 fn test_unit_propagation_conflict() {
+    use crate::convert::Builder;
     let builder = Builder {
         nogoods: vec![
             vec![
@@ -660,6 +586,7 @@ fn test_unit_propagation_conflict() {
 
 #[test]
 pub fn test_solve_1() {
+    use crate::convert::Builder;
     let builder = Builder {
         nogoods: vec![
             vec![
@@ -695,6 +622,7 @@ pub fn test_solve_1() {
 }
 #[test]
 pub fn test_solve_unsat_1() {
+    use crate::convert::Builder;
     let builder = Builder {
         nogoods: vec![
             vec![Literal { id: 0, sign: true }],
@@ -711,6 +639,7 @@ pub fn test_solve_unsat_1() {
 }
 #[test]
 pub fn test_solve_unsat_2() {
+    use crate::convert::Builder;
     let builder = Builder {
         nogoods: vec![
             vec![Literal { id: 1, sign: true }],
