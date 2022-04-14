@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::usize;
 // solve() uses a SolveResult generator as iterator.
 use genawaiter::sync::Gen;
+use log::{debug, trace};
 
 #[derive(Copy, Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct Literal {
@@ -84,13 +85,13 @@ impl Solver {
                         co.yield_(SolveResult::UnSat).await;
                     } else if self.chronological_backtracking_level < self.decision_level {
                         let (uip, sigma, k) = self.conflict_resolution(&nogood);
-                        eprintln!("uip: {:?}", &uip);
+                        debug!("uip: {:?}", &uip);
                         if self.chronological_backtracking_level > k {
                             self.decision_level = self.chronological_backtracking_level;
                         } else {
                             self.decision_level = k;
                         }
-                        eprintln!("new_decision_level: {}", self.decision_level);
+                        debug!("new_decision_level: {}", self.decision_level);
                         self.backjump();
 
                         // add complement of sigma
@@ -118,11 +119,11 @@ impl Solver {
                     } else {
                         // get decision literal from this decision_level
                         let decision_literal = self.decisions[self.decision_level - 1];
-                        // eprintln!("flip decision literal {:?}", decision_literal);
+                        // debug!("flip decision literal {:?}", decision_literal);
                         self.decision_level -= 1;
-                        eprintln!("decision_level: {}", self.decision_level);
+                        debug!("decision_level: {}", self.decision_level);
                         self.chronological_backtracking_level = self.decision_level;
-                        eprintln!(
+                        debug!(
                             "chronological_backtracking_level: {}",
                             self.chronological_backtracking_level
                         );
@@ -159,7 +160,7 @@ impl Solver {
     fn conflict_resolution(&self, nogood: &[Option<bool>]) -> (Nogood, Literal, usize) {
         let mut nogood = nogood.to_owned();
         let sigma = loop {
-            // eprintln!("delta: {:?}", nogood);
+            // debug!("delta: {:?}", nogood);
             let iter = nogood.iter().enumerate();
 
             // initialie sigma, nogood_index, decision_levl_sigma
@@ -181,7 +182,7 @@ impl Solver {
                     decision_level_sigma = decision_level;
                 }
             }
-            // eprintln!("sigma: {:?}", sigma);
+            // debug!("sigma: {:?}", sigma);
 
             // a nogood is a unique implication point if there is no other literal
             // from the same decision level as sigma
@@ -191,7 +192,7 @@ impl Solver {
                     Some((id, &Some(sign))) => {
                         let literal = Literal { id, sign };
                         if sigma != literal {
-                            // eprintln!("literal: {:?}", literal);
+                            // debug!("literal: {:?}", literal);
                             let (_, _, decision_level) = self.assignments_log[literal.id];
                             if decision_level == decision_level_sigma {
                                 break false;
@@ -205,17 +206,17 @@ impl Solver {
             if unique {
                 break sigma;
             }
-            // eprintln!("not unique");
+            // debug!("not unique");
             if let Some(nogood_index) = nogood_index {
                 let reason = &self.nogoods[nogood_index];
-                // eprintln!("reason: {:?}", reason);
+                // debug!("reason: {:?}", reason);
                 let res = resolve(&nogood, &sigma, reason);
                 nogood = res;
             } else {
                 // sigma is a decision_literals
                 // the reason is empty
                 let reason: Vec<Option<bool>> = vec![None; self.number_of_variables];
-                // eprintln!("reason: {:?}", reason);
+                // debug!("reason: {:?}", reason);
                 let res = resolve(&nogood, &sigma, &reason);
                 nogood = res;
             }
@@ -232,16 +233,16 @@ impl Solver {
                 }
             }
         }
-        // eprintln!("k: {}", k);
-        // eprintln!("sigma: {:?}", sigma);
+        // debug!("k: {}", k);
+        // debug!("sigma: {:?}", sigma);
         (nogood, sigma, k)
     }
     /// increase decision level assign truth value to a previously unassigned variable
     fn decide(&mut self) {
         self.decision_level += 1;
-        eprintln!("decision_level: {:?}", self.decision_level);
+        debug!("decision_level: {:?}", self.decision_level);
         let decision_literal = self.choose();
-        eprintln!("decision_literal: {:?}", decision_literal);
+        debug!("decision_literal: {:?}", decision_literal);
         self.assignments[decision_literal.id()] = Some(decision_literal.sign);
         self.decisions.push(decision_literal);
         self.assignments_log[decision_literal.id] =
@@ -288,7 +289,7 @@ impl Solver {
     }
     /// backjump to decision level x and rewind assignment
     fn backjump(&mut self) {
-        // eprintln!("backjump to decision_level {}", self.decision_level);
+        // debug!("backjump to decision_level {}", self.decision_level);
         for (id, assignment) in self.assignments.iter_mut().enumerate() {
             if let Some(sign) = *assignment {
                 let lit = Literal { id, sign };
@@ -309,7 +310,7 @@ impl Solver {
 
     /// run unit propagation and unfounded set check
     fn propagate(&mut self) -> PropagationResult {
-        eprintln!("propagate");
+        trace!("propagate");
         if let PropagationResult::Conflict(nogood) = self.unit_propagation() {
             return PropagationResult::Conflict(nogood);
         }
@@ -334,11 +335,11 @@ impl Solver {
 
         loop {
             if let Some(p) = propagation_queue.pop_front() {
-                // eprintln!("prp: {:?}", p);
+                // debug!("prp: {:?}", p);
 
                 for (index, sign) in &self.var_to_nogoods[p.id] {
                     let watch_list = &mut self.watch_lists[*index];
-                    // eprintln!(
+                    // debug!(
                     //     "wl.0: {} wl.1: {} nogood: {:?}",
                     //     watch_list.first_watch, watch_list.second_watch, self.nogoods[*index]
                     // );
@@ -366,14 +367,14 @@ impl Solver {
                                 }
                                 continue;
                             } else {
-                                // eprintln!("one watch could not be updated. it's a conflict or an implication.");
+                                // debug!("one watch could not be updated. it's a conflict or an implication.");
                                 let other_watch = if dirty_watch == Watch::First {
                                     &mut watch_list.second_watch
                                 } else {
                                     &mut watch_list.first_watch
                                 };
 
-                                // eprintln!("check the other watch");
+                                // debug!("check the other watch");
                                 let sign = self.nogoods_to_var[*index][other_watch];
                                 match self.assignments[*other_watch] {
                                     Some(x) => {
@@ -392,7 +393,7 @@ impl Solver {
                                             id: *other_watch,
                                             sign: complement,
                                         };
-                                        eprintln!("infer: {:?}", lit);
+                                        debug!("infer: {:?}", lit);
                                         propagation_queue.push_back(lit);
                                         self.assignments_log[*other_watch] =
                                             (Some(complement), Some(*index), self.decision_level);
@@ -560,7 +561,7 @@ fn test_unit_propagation_conflict() {
         } else {
             solver.decision_level = k;
         }
-        eprintln!("new_decision_level: {}", solver.decision_level);
+        debug!("new_decision_level: {}", solver.decision_level);
         solver.backjump();
 
         // add complement of sigma

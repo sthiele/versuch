@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use log::error;
+use log::{debug, error, info, warn};
 use solver::convert::Builder;
 use std::fs;
 use std::io;
@@ -14,6 +14,9 @@ struct Opt {
     /// Input file in aspif format
     #[clap(name = "FILE", parse(from_os_str))]
     file: Option<PathBuf>,
+    /// Verbose mode (-v, -vv, -vvv, etc)
+    #[clap(short = 'v', long = "verbose", parse(from_occurrences))]
+    verbose: usize,
 }
 
 pub enum Reader<'a> {
@@ -45,19 +48,20 @@ impl<'a> io::BufRead for Reader<'a> {
     }
 }
 fn main() {
+    let opt = Opt::parse();
+
     stderrlog::new()
         .module(module_path!())
-        .verbosity(2)
+        .verbosity(opt.verbose * 4)
+        .module("solver")
         .init()
         .unwrap();
-    if let Err(err) = run() {
+    if let Err(err) = run(opt) {
         error!("{:?}", err);
         std::process::exit(1);
     }
 }
-fn run() -> Result<()> {
-    let opt = Opt::parse();
-
+fn run(opt: Opt) -> Result<()> {
     let stdin = io::stdin();
     let input = match opt.file {
         Some(path) => {
@@ -72,6 +76,7 @@ fn run() -> Result<()> {
 
     // let mut out = std::io::stdout();
 
+    info!("Reading input ...");
     let parse_result = match input {
         Reader::File(buf_reader) => aspif::read_aspif(buf_reader)?,
         Reader::Stdin(buf_reader) => aspif::read_aspif(buf_reader)?,
@@ -80,6 +85,7 @@ fn run() -> Result<()> {
     let (builder, symbol_mapper, interner) = match parse_result {
         aspif::ParseResult::Complete(aspif_program) => Builder::from_aspif(&aspif_program),
         aspif::ParseResult::Incomplete(_) => {
+            warn!("Could not read complete aspif program.");
             panic!("Could not read complete aspif program.");
         }
     };
@@ -122,13 +128,15 @@ fn run() -> Result<()> {
                             print!("{} ", interner.resolve(*symbol).unwrap());
                         }
                     }
-                    // for (id, e) in assignments.iter().enumerate() {
-                    //     match e {
-                    //         Some(true) => print!("{} ", id),
-                    //         Some(false) => print!("~{} ", id),
-                    //         None => {}
-                    //     }
-                    // }
+                    let mut string = String::new();
+                    for (id, e) in assignments.iter().enumerate() {
+                        match e {
+                            Some(true) => string = format!("{} {}", string, id),
+                            Some(false) => string = format!("{} ~{}", string, id),
+                            None => {}
+                        }
+                    }
+                    debug!("solution: {string}");
                     println!();
                 }
                 SolveResult::UnSat => {
