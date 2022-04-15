@@ -83,6 +83,7 @@ fn run(opt: Opt) -> Result<()> {
         Reader::Stdin(buf_reader) => aspif::read_aspif(buf_reader)?,
     };
 
+    info!("Translate to nogoods (wip) ...");
     let (builder, symbol_mapper, interner) = match parse_result {
         aspif::ParseResult::Complete(aspif_program) => Builder::from_aspif(&aspif_program),
         aspif::ParseResult::Incomplete(_) => {
@@ -105,7 +106,9 @@ fn run(opt: Opt) -> Result<()> {
     //     ],
     // };
 
+    info!("Build solver ...");
     let mut solver = builder.build();
+    info!("Solve ...");
     use solver::solver::SolveResult;
     let mut solutions = solver.solve().enumerate();
 
