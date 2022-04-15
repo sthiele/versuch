@@ -1,21 +1,16 @@
 use crate::solver::{Literal, Map, Solver, WatchList};
 use aspif::AspifProgram;
+use log::debug;
 use string_interner::symbol::SymbolU32;
 use string_interner::StringInterner;
 
+#[derive(Default)]
 pub struct LiteralMapper {
     aspif_literals: Map<u64, usize>,
     bodies: Map<Vec<Literal>, usize>,
     literal_count: usize,
 }
 impl LiteralMapper {
-    pub fn new() -> Self {
-        LiteralMapper {
-            aspif_literals: Map::default(),
-            bodies: Map::default(),
-            literal_count: 0,
-        }
-    }
     pub fn u64_to_solver_literal(&mut self, a: &u64) -> Literal {
         if let Some((_key, value)) = self.aspif_literals.get_key_value(a) {
             Literal {
@@ -23,12 +18,13 @@ impl LiteralMapper {
                 sign: true,
             }
         } else {
-            self.literal_count += 1;
             self.aspif_literals.insert(*a, self.literal_count);
-            Literal {
+            let literal = Literal {
                 id: self.literal_count,
                 sign: true,
-            }
+            };
+            self.literal_count += 1;
+            literal
         }
     }
     pub fn i64_to_solver_literal(&mut self, a: &i64) -> Literal {
@@ -55,12 +51,13 @@ impl LiteralMapper {
                     sign: false,
                 }
             } else {
-                self.literal_count += 1;
                 self.aspif_literals.insert(b as u64, self.literal_count);
-                Literal {
+                let literal = Literal {
                     id: self.literal_count,
                     sign: false,
-                }
+                };
+                self.literal_count += 1;
+                literal
             }
         }
     }
@@ -93,6 +90,10 @@ pub fn insert_into_symbol_mapper(
     for e in condition {
         new_condition.push(literal_mapper.i64_to_solver_literal(e));
     }
+    // TODO: This is buggy if there could be multiple symbols with the same condition
+    // q :- not p.
+    // p :- not q.
+    // #show t:p.
     symbol_mapper.insert(new_condition, symbol);
 }
 
@@ -102,7 +103,7 @@ pub struct Builder {
 impl Builder {
     pub fn from_aspif(aspif_program: &AspifProgram) -> (Self, SymbolMapper, StringInterner) {
         let mut interner = StringInterner::default();
-        let mut literal_mapper = LiteralMapper::new();
+        let mut literal_mapper = LiteralMapper::default();
         let mut symbol_mapper = SymbolMapper::default();
 
         let mut nogoods = vec![];
@@ -136,10 +137,10 @@ impl Builder {
                                 nogood.push(literal_mapper.u64_to_solver_literal(e))
                             }
                             nogood.push(literal_mapper.body2solver_literal(&body_clause));
+                            debug!("Nogood: {nogood:?}");
                             nogoods.push(nogood)
                         }
                         aspif::Head::Choice { elements } => {
-                            // println!("Choice");
                             panic!("Unsupported Head : Choice")
                         }
                     }
@@ -186,10 +187,9 @@ impl Builder {
                 // } => todo!(),
                 // aspif::Statement::Comment => todo!(),
                 _ => {
-                    println!("Unsupported Statement")
+                    panic!("Unsupported Statement");
                 }
             }
-            println!("{:?}", statement);
         }
         (Builder { nogoods }, symbol_mapper, interner)
     }
@@ -212,12 +212,12 @@ impl Builder {
                     solver_nogood[id] = Some(false);
                 }
             }
+            debug!("Solver nogood: {:?}", solver_nogood);
             solver_nogoods.push(solver_nogood);
         }
 
         let mut watch_lists = vec![];
         for nogood in &solver_nogoods {
-            eprintln!("nogood: {:?}", nogood);
             //  TODO: special handling for nogoods of size 1
             let mut left_watch = 0;
             while nogood[left_watch] == None {

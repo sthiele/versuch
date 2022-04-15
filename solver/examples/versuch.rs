@@ -53,7 +53,8 @@ fn main() {
     stderrlog::new()
         .module(module_path!())
         .verbosity(opt.verbose * 4)
-        .module("solver")
+        // .module("solver")
+        .module("solver::convert")
         .init()
         .unwrap();
     if let Err(err) = run(opt) {
