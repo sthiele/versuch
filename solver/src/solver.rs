@@ -6,17 +6,20 @@ use log::{debug, trace};
 
 #[derive(Copy, Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct Literal {
-    pub id: usize,
-    pub sign: bool,
+    id: usize,
+    sign: bool,
 }
 impl Literal {
-    pub(crate) fn id(&self) -> usize {
+    pub(crate) fn new(id: usize, sign: bool) -> Literal {
+        Literal { id, sign }
+    }
+    pub fn id(&self) -> usize {
         self.id
     }
     pub fn sign(&self) -> bool {
         self.sign
     }
-    pub fn negate(&self) -> Literal {
+    pub(crate) fn negate(&self) -> Literal {
         Literal {
             id: self.id,
             sign: !self.sign,
@@ -461,11 +464,11 @@ fn resolve(nogood: &[Option<bool>], sigma: &Literal, reason: &[Option<bool>]) ->
 fn nogood_to_watch_list(nogood: &[Option<bool>]) -> WatchList {
     //  TODO: special handling for nogoods of size 1
     let mut first_watch = 0;
-    while nogood[first_watch] == None {
+    while nogood[first_watch].is_none() {
         first_watch += 1;
     }
     let mut second_watch = nogood.len() - 1;
-    while nogood[second_watch] == None {
+    while nogood[second_watch].is_none() {
         second_watch -= 1;
     }
     WatchList {

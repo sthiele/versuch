@@ -23,7 +23,6 @@ pub enum Reader<'a> {
     File(io::BufReader<fs::File>),
     Stdin(io::StdinLock<'a>),
 }
-
 impl<'a> io::Read for Reader<'a> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
@@ -32,7 +31,6 @@ impl<'a> io::Read for Reader<'a> {
         }
     }
 }
-
 impl<'a> io::BufRead for Reader<'a> {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
         match self {
@@ -85,7 +83,12 @@ fn run(opt: Opt) -> Result<()> {
 
     info!("Translate to nogoods (wip) ...");
     let (builder, symbol_mapper, interner) = match parse_result {
-        aspif::ParseResult::Complete(aspif_program) => Builder::from_aspif(&aspif_program),
+        aspif::ParseResult::Complete(aspif_program) => {
+            info!("Create a (directed) positive atom dependecy graph (wip)...");
+            let res = solver::convert::graph_from_aspif(&aspif_program);
+            info!("Create a builder (wip) ...");
+            Builder::from_aspif(&aspif_program)
+        }
         aspif::ParseResult::Incomplete(_) => {
             warn!("Could not read complete aspif program.");
             panic!("Could not read complete aspif program.");
@@ -120,8 +123,8 @@ fn run(opt: Opt) -> Result<()> {
                     for (condition, symbol) in &symbol_mapper {
                         let mut satisfied = true;
                         for literal in condition {
-                            match assignments[literal.id] {
-                                Some(sign) => satisfied = sign == literal.sign,
+                            match assignments[literal.id()] {
+                                Some(sign) => satisfied = sign == literal.sign(),
                                 None => panic!("Partial assignment!"),
                             }
                             if !satisfied {

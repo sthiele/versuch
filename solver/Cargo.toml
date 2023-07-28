@@ -12,7 +12,9 @@ repository = "https://github.com/sthiele/versuch"
 rustc-hash = "1.1.0"
 genawaiter = { version = "0.99" }
 string-interner = "0.14"
+petgraph = "0.6"
 aspif = {git ="https://github.com/sthiele/aspif-parser", branch="st/wip"}
+# aspif = {path = "../../aspif-parser"}
 
 
 clap = { version = "3.0", features = ["derive"] }
