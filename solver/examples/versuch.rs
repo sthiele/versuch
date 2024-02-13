@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use log::{debug, error, info, warn};
 use solver::convert::Builder;
+use solver::solver::create_test_solver;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -51,7 +52,7 @@ fn main() {
     stderrlog::new()
         .module(module_path!())
         .verbosity(opt.verbose * 4)
-        // .module("solver")
+        .module("solver")
         .module("solver::convert")
         .init()
         .unwrap();
@@ -94,23 +95,18 @@ fn run(opt: Opt) -> Result<()> {
             panic!("Could not read complete aspif program.");
         }
     };
-
-    // let builder = Builder {
-    //     nogoods: vec![
-    //         vec![
-    //             Literal { id: 0, sign: true },
-    //             Literal { id: 1, sign: false },
-    //         ],
-    //         vec![
-    //             Literal { id: 1, sign: true },
-    //             Literal { id: 2, sign: false },
-    //         ],
-    //         vec![Literal { id: 2, sign: true }, Literal { id: 1, sign: true }],
-    //     ],
-    // };
+    // return Ok(());
 
     info!("Build solver ...");
     let mut solver = builder.build();
+    for (condition, symbol) in &symbol_mapper {
+        println!(
+            "condition:{:?} symbol:{} ",
+            condition,
+            interner.resolve(*symbol).unwrap()
+        );
+    }
+    // let mut solver = create_test_solver();
     info!("Solve ...");
     use solver::solver::SolveResult;
     let mut solutions = solver.solve().enumerate();
@@ -134,6 +130,7 @@ fn run(opt: Opt) -> Result<()> {
                         if satisfied {
                             print!("{} ", interner.resolve(*symbol).unwrap());
                         }
+                        // debug!("condition: {:?} sym: {}",condition,interner.resolve(*symbol).unwrap());
                     }
                     let mut string = String::new();
                     for (id, e) in assignments.iter().enumerate() {

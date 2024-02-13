@@ -73,7 +73,9 @@ pub struct Solver {
     pub(crate) var_to_nogoods: Vec<Map<usize, bool>>,
     pub(crate) nogoods_to_var: Vec<Map<usize, bool>>,
     pub(crate) decision_level: usize,
-    pub(crate) assignments_log: Vec<(Option<bool>, Option<usize>, usize)>,
+    pub(crate) decision_number: usize,
+    // Stores for each atom that has been decided the (sign, reason_index, decision_level, and decision number)
+    pub(crate) assignments_log: Vec<(Option<bool>, Option<usize>, usize, usize)>,
     pub(crate) chronological_backtracking_level: usize,
 }
 impl Solver {
@@ -83,12 +85,15 @@ impl Solver {
 
             while sat {
                 if let PropagationResult::Conflict(nogood) = self.propagate() {
+                    trace!("conflict with nogood: {:?}", nogood);
                     if self.is_top_level_conflict(&nogood) {
                         sat = false;
                         co.yield_(SolveResult::UnSat).await;
                     } else if self.chronological_backtracking_level < self.decision_level {
                         let (uip, sigma, k) = self.conflict_resolution(&nogood);
                         debug!("uip: {:?}", &uip);
+                        debug!("sigma: {:?}", sigma);
+                        debug!("k: {:?}", k);
                         if self.chronological_backtracking_level > k {
                             self.decision_level = self.chronological_backtracking_level;
                         } else {
@@ -98,8 +103,10 @@ impl Solver {
                         self.backjump();
 
                         // add complement of sigma
+                        self.decision_number += 1;
                         self.assignments[sigma.id] = Some(!sigma.sign);
-                        self.assignments_log[sigma.id] = (Some(!sigma.sign), None, k);
+                        self.assignments_log[sigma.id] =
+                            (Some(!sigma.sign), None, k, self.decision_number);
                         self.record_nogood(uip);
                     } else {
                         //get decision literal from this decision_level
@@ -110,9 +117,14 @@ impl Solver {
                         self.backjump();
 
                         // add complement of the decision literal
+                        self.decision_number += 1;
                         self.assignments[decision_literal.id] = Some(!decision_literal.sign);
-                        self.assignments_log[decision_literal.id] =
-                            (Some(!decision_literal.sign), None, self.decision_level);
+                        self.assignments_log[decision_literal.id] = (
+                            Some(!decision_literal.sign),
+                            None,
+                            self.decision_level,
+                            self.decision_number,
+                        );
                     }
                 } else if self.assignment_complete() {
                     co.yield_(SolveResult::Sat(self.assignments.clone())).await;
@@ -133,11 +145,15 @@ impl Solver {
                         self.backjump();
 
                         // add complement of the decision literal
+                        self.decision_number += 1;
                         self.assignments[decision_literal.id] = Some(!decision_literal.sign);
-                        self.assignments_log[decision_literal.id] =
-                            (Some(!decision_literal.sign), None, self.decision_level);
+                        self.assignments_log[decision_literal.id] = (
+                            Some(!decision_literal.sign),
+                            None,
+                            self.decision_level,
+                            self.decision_number,
+                        );
                     }
-                    // TODO cleanup learnt nogoods
                 } else {
                     self.decide()
                 }
@@ -159,35 +175,33 @@ impl Solver {
         }
     }
 
-    /// analyze conflict and learn UIP nogood
+    /// Analyze conflict and learn UIP nogood
     fn conflict_resolution(&self, nogood: &[Option<bool>]) -> (Nogood, Literal, usize) {
         let mut nogood = nogood.to_owned();
+
         let sigma = loop {
-            // debug!("delta: {:?}", nogood);
+            debug!("delta: {:?}", nogood);
             let iter = nogood.iter().enumerate();
 
-            // initialie sigma, nogood_index, decision_levl_sigma
+            // Determine sigma the last literal in delta that has been added to the assignment
             let mut sigma = Literal { id: 0, sign: true };
             let mut nogood_index = None;
             let mut decision_level_sigma = 0;
+            let mut biggest_decision_number = 0;
             for (id, assignment) in iter {
                 if let Some(sign) = *assignment {
-                    let literal = Literal { id, sign };
-                    let (_, ng_index, decision_level) = self.assignments_log[literal.id];
-                    if let Some(index) = ng_index {
-                        sigma = literal;
-                        nogood_index = Some(index);
+                    let (_, ng_index, decision_level, decision_number) = self.assignments_log[id];
+                    if decision_number >= biggest_decision_number {
+                        biggest_decision_number = decision_number;
+                        sigma = Literal { id, sign };
+                        nogood_index = ng_index;
                         decision_level_sigma = decision_level;
-                        break;
                     }
-                    sigma = literal;
-                    nogood_index = None;
-                    decision_level_sigma = decision_level;
                 }
             }
-            // debug!("sigma: {:?}", sigma);
+            debug!("sigma: {:?}", sigma);
 
-            // a nogood is a unique implication point if there is no other literal
+            // A nogood is a unique implication point if there is no other literal
             // from the same decision level as sigma
             let mut iter = nogood.iter().enumerate();
             let unique = loop {
@@ -196,7 +210,7 @@ impl Solver {
                         let literal = Literal { id, sign };
                         if sigma != literal {
                             // debug!("literal: {:?}", literal);
-                            let (_, _, decision_level) = self.assignments_log[literal.id];
+                            let (_, _, decision_level, _) = self.assignments_log[literal.id];
                             if decision_level == decision_level_sigma {
                                 break false;
                             }
@@ -212,7 +226,7 @@ impl Solver {
             // debug!("not unique");
             if let Some(nogood_index) = nogood_index {
                 let reason = &self.nogoods[nogood_index];
-                // debug!("reason: {:?}", reason);
+                debug!("reason: {:?}", reason);
                 let res = resolve(&nogood, &sigma, reason);
                 nogood = res;
             } else {
@@ -229,7 +243,7 @@ impl Solver {
             if let Some(sign) = *assignment {
                 let literal = Literal { id, sign };
                 if literal != sigma {
-                    let (_, _, decision_level) = self.assignments_log[literal.id];
+                    let (_, _, decision_level, _) = self.assignments_log[literal.id];
                     if decision_level > k {
                         k = decision_level
                     }
@@ -240,16 +254,22 @@ impl Solver {
         // debug!("sigma: {:?}", sigma);
         (nogood, sigma, k)
     }
-    /// increase decision level assign truth value to a previously unassigned variable
+
+    /// Increase decision level assign truth value to a previously unassigned variable
     fn decide(&mut self) {
         self.decision_level += 1;
+        self.decision_number += 1;
         debug!("decision_level: {:?}", self.decision_level);
         let decision_literal = self.choose();
         debug!("decision_literal: {:?}", decision_literal);
         self.assignments[decision_literal.id()] = Some(decision_literal.sign);
         self.decisions.push(decision_literal);
-        self.assignments_log[decision_literal.id] =
-            (Some(decision_literal.sign), None, self.decision_level);
+        self.assignments_log[decision_literal.id] = (
+            Some(decision_literal.sign),
+            None,
+            self.decision_level,
+            self.decision_number,
+        );
     }
 
     fn choose(&self) -> Literal {
@@ -265,7 +285,7 @@ impl Solver {
         panic!("Logic error: calling choose on complete assignment-");
     }
 
-    /// return true if all variables have a truth value assignment
+    /// Return true if all variables have a truth value assignment
     fn assignment_complete(&self) -> bool {
         for id in 0..self.number_of_variables {
             if self.assignments[id] == Some(true) {
@@ -278,11 +298,11 @@ impl Solver {
         }
         true
     }
-    /// return true if there is a conflict on decision level 0
+    /// Return true if there is a conflict on decision level 0
     fn is_top_level_conflict(&self, nogood: &[Option<bool>]) -> bool {
         for (id, assignment) in nogood.iter().enumerate() {
             if assignment.is_some() {
-                let (_, _, decision_level) = self.assignments_log[id];
+                let (_, _, decision_level, _) = self.assignments_log[id];
                 if decision_level > 0 {
                     return false;
                 }
@@ -290,17 +310,20 @@ impl Solver {
         }
         true
     }
-    /// backjump to decision level x and rewind assignment
+    /// Backjump to decision level x and rewind assignment
     fn backjump(&mut self) {
         // debug!("backjump to decision_level {}", self.decision_level);
         for (id, assignment) in self.assignments.iter_mut().enumerate() {
             if let Some(sign) = *assignment {
                 let lit = Literal { id, sign };
-                let (_, _, decision_level) = self.assignments_log[lit.id];
+                let (_, _, decision_level, decision_number) = self.assignments_log[lit.id];
 
                 if decision_level > self.decision_level {
-                    self.assignments_log[lit.id] = (None, None, 0);
+                    self.assignments_log[lit.id] = (None, None, 0, 0);
                     *assignment = None;
+                }
+                if decision_number > self.decision_number {
+                    self.decision_number = decision_number - 1;
                 }
             }
         }
@@ -311,9 +334,10 @@ impl Solver {
         }
     }
 
-    /// run unit propagation and unfounded set check
+    /// Run unit propagation and unfounded set check
     fn propagate(&mut self) -> PropagationResult {
         trace!("propagate");
+        trace!("assignment: {:?}", self.assignments);
         if let PropagationResult::Conflict(nogood) = self.unit_propagation() {
             return PropagationResult::Conflict(nogood);
         }
@@ -323,7 +347,7 @@ impl Solver {
         PropagationResult::Ok
     }
 
-    /// learn a nogood for an unfounded loop
+    /// Learn a nogood for an unfounded loop
     fn unfounded_loop_learning(&mut self) {
         todo!()
     }
@@ -338,7 +362,7 @@ impl Solver {
 
         loop {
             if let Some(p) = propagation_queue.pop_front() {
-                // debug!("prp: {:?}", p);
+                debug!("prp: {:?}", p);
 
                 for (index, sign) in &self.var_to_nogoods[p.id] {
                     let watch_list = &mut self.watch_lists[*index];
@@ -397,9 +421,20 @@ impl Solver {
                                             sign: complement,
                                         };
                                         debug!("infer: {:?}", lit);
+                                        self.decision_number += 1;
                                         propagation_queue.push_back(lit);
-                                        self.assignments_log[*other_watch] =
-                                            (Some(complement), Some(*index), self.decision_level);
+                                        self.assignments_log[*other_watch] = (
+                                            Some(complement),
+                                            Some(*index),
+                                            self.decision_level,
+                                            self.decision_number,
+                                        );
+
+                                        debug!(
+                                            "infer2: {:?} {:?}",
+                                            *other_watch,
+                                            (Some(complement), Some(*index), self.decision_level)
+                                        );
                                     }
                                 }
                             }
@@ -488,15 +523,27 @@ fn create_watch_lists(nogoods: &[Vec<Option<bool>>]) -> Vec<WatchList> {
 /// only for testing
 fn mock_decide(solver: &mut Solver) {
     solver.decision_level += 1;
+    solver.decision_number += 1;
     solver.assignments[0] = Some(true);
-    solver.assignments_log[0] = (Some(true), None, solver.decision_level);
+    solver.assignments_log[0] = (
+        Some(true),
+        None,
+        solver.decision_level,
+        solver.decision_number,
+    );
 }
 
 /// only for testing
 fn mock_decide2(solver: &mut Solver) {
     solver.decision_level += 1;
+    solver.decision_number += 1;
     solver.assignments[2] = Some(true);
-    solver.assignments_log[2] = (Some(true), None, solver.decision_level);
+    solver.assignments_log[2] = (
+        Some(true),
+        None,
+        solver.decision_level,
+        solver.decision_number,
+    );
 }
 #[test]
 fn test_unit_propagation() {
@@ -523,7 +570,8 @@ fn test_unit_propagation() {
         var_to_nogoods,
         nogoods_to_var,
         decision_level: 0,
-        assignments_log: vec![(None, None, 0); number_of_variables],
+        decision_number: 0,
+        assignments_log: vec![(None, None, 0, 0); number_of_variables],
         chronological_backtracking_level: 0,
     };
     solver.watch_lists = create_watch_lists(&solver.nogoods);
@@ -557,23 +605,24 @@ fn test_unit_propagation_conflict() {
         let top_level_conflict = solver.is_top_level_conflict(&nogood);
         assert_eq!(top_level_conflict, false);
         let (uip, sigma, k) = solver.conflict_resolution(&nogood);
-        assert_eq!(uip, vec![Some(true), None, None]);
-        assert_eq!(sigma, Literal { id: 0, sign: true });
+        assert_eq!(uip, vec![None, Some(true), None]);
+        assert_eq!(sigma, Literal { id: 1, sign: true });
         if solver.chronological_backtracking_level > k {
             solver.decision_level = solver.chronological_backtracking_level;
         } else {
             solver.decision_level = k;
         }
-        debug!("new_decision_level: {}", solver.decision_level);
+        println!("new_decision_level: {}", solver.decision_level);
         solver.backjump();
 
         // add complement of sigma
+        solver.decision_number += 1;
         solver.assignments[sigma.id] = Some(!sigma.sign);
-        solver.assignments_log[sigma.id] = (Some(!sigma.sign), None, k);
+        solver.assignments_log[sigma.id] = (Some(!sigma.sign), None, k, solver.decision_number);
         solver.record_nogood(uip);
         let res = solver.unit_propagation();
         assert_eq!(res, PropagationResult::Ok);
-        assert_eq!(solver.assignments, vec![Some(false), None, None]);
+        assert_eq!(solver.assignments, vec![Some(false), Some(false), None]);
 
         mock_decide2(&mut solver); // assign Literal(2)
 
@@ -657,4 +706,166 @@ pub fn test_solve_unsat_2() {
     assert_eq!(res, Some(SolveResult::UnSat));
     let res = solutions.next();
     assert_eq!(res, None);
+}
+
+pub fn create_test_solver() -> Solver {
+    use crate::convert::Builder;
+    let builder = Builder {
+        nogoods: vec![
+            vec![
+                Literal { id: 3, sign: false },
+                Literal { id: 2, sign: true },
+            ],
+            vec![
+                Literal { id: 0, sign: false },
+                Literal { id: 5, sign: true },
+            ],
+            vec![
+                Literal { id: 7, sign: false },
+                Literal { id: 4, sign: false },
+                Literal { id: 6, sign: true },
+            ],
+            vec![
+                Literal { id: 3, sign: false },
+                Literal { id: 9, sign: true },
+            ],
+            vec![
+                Literal { id: 0, sign: false },
+                Literal { id: 7, sign: false },
+                Literal { id: 10, sign: true },
+            ],
+            vec![
+                Literal { id: 1, sign: false },
+                Literal { id: 12, sign: true },
+            ],
+            vec![
+                Literal { id: 0, sign: true },
+                Literal { id: 5, sign: false },
+                Literal {
+                    id: 11,
+                    sign: false,
+                },
+            ],
+            vec![
+                Literal { id: 7, sign: true },
+                Literal { id: 8, sign: false },
+                Literal { id: 8, sign: false },
+            ],
+            vec![
+                Literal { id: 4, sign: true },
+                Literal { id: 5, sign: false },
+            ],
+            vec![
+                Literal { id: 1, sign: true },
+                Literal {
+                    id: 12,
+                    sign: false,
+                },
+            ],
+            vec![
+                Literal { id: 3, sign: true },
+                Literal { id: 2, sign: false },
+                Literal { id: 9, sign: false },
+            ],
+            vec![Literal { id: 8, sign: true }, Literal { id: 7, sign: true }],
+            vec![
+                Literal { id: 8, sign: false },
+                Literal { id: 7, sign: false },
+            ],
+            vec![
+                Literal { id: 9, sign: true },
+                Literal { id: 4, sign: false },
+                Literal { id: 7, sign: true },
+            ],
+            vec![
+                Literal { id: 9, sign: true },
+                Literal { id: 4, sign: true },
+                Literal { id: 7, sign: false },
+            ],
+            vec![
+                Literal { id: 9, sign: false },
+                Literal { id: 4, sign: true },
+                Literal { id: 7, sign: true },
+            ],
+            vec![
+                Literal { id: 11, sign: true },
+                Literal { id: 0, sign: true },
+            ],
+            vec![
+                Literal {
+                    id: 11,
+                    sign: false,
+                },
+                Literal { id: 0, sign: false },
+            ],
+            vec![
+                Literal { id: 5, sign: true },
+                Literal { id: 3, sign: false },
+                Literal { id: 4, sign: false },
+            ],
+            vec![
+                Literal { id: 5, sign: true },
+                Literal { id: 3, sign: true },
+                Literal { id: 4, sign: true },
+            ],
+            vec![
+                Literal { id: 5, sign: false },
+                Literal { id: 3, sign: true },
+                Literal { id: 4, sign: false },
+            ],
+            vec![
+                Literal { id: 10, sign: true },
+                Literal { id: 1, sign: true },
+            ],
+            vec![
+                Literal {
+                    id: 10,
+                    sign: false,
+                },
+                Literal { id: 1, sign: false },
+            ],
+            vec![
+                Literal { id: 12, sign: true },
+                Literal { id: 0, sign: true },
+                Literal { id: 7, sign: false },
+            ],
+            vec![
+                Literal { id: 12, sign: true },
+                Literal { id: 0, sign: false },
+                Literal { id: 7, sign: true },
+            ],
+            vec![
+                Literal {
+                    id: 12,
+                    sign: false,
+                },
+                Literal { id: 0, sign: false },
+                Literal { id: 7, sign: false },
+            ],
+            vec![
+                Literal { id: 6, sign: true },
+                Literal { id: 3, sign: false },
+            ],
+            vec![
+                Literal { id: 6, sign: false },
+                Literal { id: 3, sign: true },
+            ],
+            vec![
+                Literal { id: 2, sign: true },
+                Literal { id: 0, sign: false },
+                Literal { id: 1, sign: false },
+            ],
+            vec![
+                Literal { id: 2, sign: true },
+                Literal { id: 0, sign: true },
+                Literal { id: 1, sign: true },
+            ],
+            vec![
+                Literal { id: 2, sign: false },
+                Literal { id: 0, sign: true },
+                Literal { id: 1, sign: false },
+            ],
+        ],
+    };
+    builder.build()
 }

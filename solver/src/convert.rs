@@ -1,5 +1,7 @@
+use std::io::BufReader;
+
 use crate::solver::{Literal, Map, Solver, WatchList};
-use aspif::AspifProgram;
+use aspif::{AspifProgram, ParseResult};
 use log::{debug, info};
 use string_interner::symbol::SymbolU32;
 use string_interner::StringInterner;
@@ -9,7 +11,7 @@ pub struct LiteralMapper {
     aspif_literals: Map<u64, usize>,
     pub bodies: Map<Vec<Literal>, usize>,
     literal_count: usize,
-    supports: Map<usize, Vec<Literal>>,
+    supports: Map<usize, Vec<(Vec<Literal>, Vec<Literal>)>>,
 }
 impl LiteralMapper {
     fn u64_to_solver_literal(&mut self, a: &u64) -> Literal {
@@ -45,6 +47,8 @@ impl LiteralMapper {
             }
         }
     }
+    /// Returns corresponding solver literal if the body already exist in the LiteralMap
+    /// else creates a new entry and returns the literal
     fn body2solver_literal(&mut self, body: &[Literal]) -> Literal {
         if let Some((_key, value)) = self.bodies.get_key_value(body) {
             Literal::new(*value, true)
@@ -56,7 +60,7 @@ impl LiteralMapper {
         }
     }
     /// Returns corresponding solver literal if the body already exist in the LiteralMap
-    fn get_body_literal(&mut self, body: &[Literal]) -> Option<Literal> {
+    fn get_body_literal(&self, body: &[Literal]) -> Option<Literal> {
         self.bodies
             .get(body)
             .map(|value| Literal::new(*value, true))
@@ -72,7 +76,7 @@ impl LiteralMapper {
                 for e in elements {
                     body_clause.push(self.i64_to_solver_literal(e));
                 }
-                // TODO: is sort and dedup necessary
+                // TODO: is sort and dedup here necessary ?
                 body_clause.sort();
                 body_clause.dedup();
                 body_clause
@@ -87,6 +91,7 @@ impl LiteralMapper {
         match &rule.head {
             aspif::Head::Disjunction { elements } => {
                 let ori_body_lit = self.body2solver_literal(&body_clause);
+                debug!("Body_lit:{:?} -> {:?}", ori_body_lit, body_clause);
                 // Create rule nogood
                 let mut rule_nogood = vec![];
                 for e in elements {
@@ -102,26 +107,19 @@ impl LiteralMapper {
                 // Shift head atoms to the new body
                 for (idx, e) in elements.iter().enumerate() {
                     let new_head_lit = self.u64_to_solver_literal(e);
-                    let mut new_body = body_clause.clone();
-                    let mut new_body2 = vec![];
-                    for (idx2, _e) in elements.iter().enumerate() {
+                    let mut body_extension = vec![];
+                    for (idx2, e) in elements.iter().enumerate() {
                         if idx2 != idx {
                             let lit2 = self.u64_to_solver_literal(e);
                             let neg_lit = lit2.negate();
-                            new_body.push(neg_lit);
-                            new_body2.push(neg_lit);
+                            body_extension.push(neg_lit);
                         }
                     }
-                    let new_body_lit = if let Some(lit) = self.get_body_literal(&new_body) {
-                        lit
-                    } else {
-                        self.body2solver_literal(&new_body2)
-                    };
+                    // debug!("Support for {new_head_lit:?}: {:?}{:?}",body_clause,body_extension);
                     self.supports
                         .entry(new_head_lit.id())
-                        .and_modify(|e| e.push(new_body_lit))
-                        .or_insert(vec![new_body_lit]);
-                    debug!("Support for {new_head_lit:?}: {new_body_lit:?}");
+                        .and_modify(|e| e.push((body_clause.clone(), body_extension.clone())))
+                        .or_insert(vec![(body_clause.clone(), body_extension)]);
                 }
             }
             aspif::Head::Choice { elements } => {
@@ -131,15 +129,30 @@ impl LiteralMapper {
     }
 
     /// This function creates support nogoods as in Definition 2 in *Advanced Conflict-Driven Disjunctive Answer Set Solving*
-    fn write_support_nogoods(&self, nogoods: &mut Vec<Vec<Literal>>) {
+    fn write_support_nogoods(&mut self, nogoods: &mut Vec<Vec<Literal>>) {
         for (k, support) in &self.supports {
             let mut support_nogood = vec![];
             // Create support nogoods
             support_nogood.push(Literal::new(*k, true));
-            for lit in support {
-                let neg_lit = lit.negate();
-                support_nogood.push(neg_lit);
+            for (old_body, extension) in support {
+                let mut new_body = old_body.clone();
+                new_body.extend_from_slice(extension);
+                if let Some(lit) = self.get_body_literal(&new_body) {
+                    // new_body is known
+                    let neg_lit = lit.negate();
+                    support_nogood.push(neg_lit);
+                } else if let Some(lit) = self.get_body_literal(old_body) {
+                    let neg_lit = lit.negate();
+                    support_nogood.push(neg_lit);
+                    for lit in extension {
+                        let neg_lit = lit.negate();
+                        support_nogood.push(neg_lit);
+                    }
+                } else {
+                    unreachable!()
+                }
             }
+
             debug!("Support nogood: {:?}", support_nogood);
             nogoods.push(support_nogood);
         }
@@ -148,23 +161,20 @@ impl LiteralMapper {
     /// This function creates conjunction nogoods as in Definition 3 in *Advanced Conflict-Driven Disjunctive Answer Set Solving*
     fn write_conjuction_nogoods(&self, nogoods: &mut Vec<Vec<Literal>>) {
         for (body, lit_id) in &self.bodies {
+            debug!("CNG  lit:{} body{:?}", lit_id, body);
             let mut conjunction_nogood1 = vec![];
             let lit = Literal::new(*lit_id, true);
             let neg_lit = Literal::new(*lit_id, false);
             conjunction_nogood1.push(neg_lit);
             for l in body.iter() {
                 conjunction_nogood1.push(*l);
-                let mut conjunction_nogoodn = vec![];
-                conjunction_nogoodn.push(lit);
-                for l2 in body.iter() {
-                    if *l == *l2 {
-                        conjunction_nogoodn.push(l.negate())
-                    } else {
-                        conjunction_nogoodn.push(*l2)
-                    }
-                }
+                let mut conjunction_nogoodn = vec![lit];
+                conjunction_nogoodn.push(l.negate());
+                debug!("Conjunction nogood: {:?}", conjunction_nogoodn);
                 nogoods.push(conjunction_nogoodn);
             }
+
+            debug!("Conjunction nogood: {:?}", conjunction_nogood1);
             nogoods.push(conjunction_nogood1);
         }
     }
@@ -258,13 +268,20 @@ pub fn graph_from_aspif(aspif_program: &AspifProgram) {
     let mut positive_atom_dependency_graph: DiGraph<u32, ()> = DiGraph::default();
 
     for statement in &aspif_program.statements {
+        debug!("stmt:{:?}", statement);
         match statement {
             aspif::Statement::Rule(rule) => {
-                let body_clause = match &rule.body {
+                let positive_body = match &rule.body {
                     aspif::Body::NormalBody { elements } => {
                         let mut body_clause = vec![];
-                        for e in elements {
-                            body_clause.push(literal_mapper.i64_to_solver_literal(e));
+                        for atom in elements {
+                            let body_lit = literal_mapper.i64_to_solver_literal(atom);
+                            if *atom >= 0 {
+                                while positive_atom_dependency_graph.node_count() <= body_lit.id() {
+                                    let _a = positive_atom_dependency_graph.add_node(0);
+                                }
+                                body_clause.push(body_lit);
+                            }
                         }
                         body_clause.sort();
                         body_clause
@@ -278,23 +295,23 @@ pub fn graph_from_aspif(aspif_program: &AspifProgram) {
                 };
                 match &rule.head {
                     aspif::Head::Disjunction { elements } => {
-                        for body_lit in &body_clause {
-                            if body_lit.sign() {
-                                for head_atom_id in elements {
-                                    while positive_atom_dependency_graph.node_count()
-                                        <= *head_atom_id as usize
-                                    {
-                                        let _a = positive_atom_dependency_graph.add_node(0);
-                                    }
-                                    let a = NodeIndex::from(*head_atom_id as u32);
-                                    while positive_atom_dependency_graph.node_count()
-                                        <= body_lit.id()
-                                    {
-                                        let _a = positive_atom_dependency_graph.add_node(0);
-                                    }
-                                    let b = NodeIndex::from(body_lit.id() as u32);
-                                    positive_atom_dependency_graph.add_edge(a, b, ());
+                        for body_lit in &positive_body {
+                            for head_atom_id in elements {
+                                while positive_atom_dependency_graph.node_count()
+                                    <= *head_atom_id as usize
+                                {
+                                    let _a = positive_atom_dependency_graph.add_node(0);
                                 }
+                                let head_lit = literal_mapper.u64_to_solver_literal(head_atom_id);
+                                // TODO: Possible problem when usize is converted to u32 👇️
+                                let a = NodeIndex::from(head_lit.id() as u32);
+                                eprintln!("head_atom_id: {}, node_idx: {:?}", *head_atom_id, a);
+                                while positive_atom_dependency_graph.node_count() <= body_lit.id() {
+                                    let _a = positive_atom_dependency_graph.add_node(0);
+                                }
+                                let b = NodeIndex::from(body_lit.id() as u32);
+                                eprintln!("body_lit_id: {}, node_idx: {:?}", body_lit.id(), b);
+                                positive_atom_dependency_graph.add_edge(a, b, ());
                             }
                         }
                     }
@@ -348,6 +365,29 @@ pub fn graph_from_aspif(aspif_program: &AspifProgram) {
 
     for scc in components {
         debug!("{scc:?}");
+    }
+}
+
+#[test]
+fn test_graph_from_aspif() {
+    use std::io::Cursor;
+    let buf_reader = Cursor::new(r"asp 1 0 0
+1 0 1 4 0 2 1 -3
+1 0 1 1 0 2 4 -5
+1 0 2 2 5 0 1 4
+1 0 1 4 0 2 5 2
+1 0 2 1 2 0 1 -3
+1 0 1 3 0 2 -1 -2
+4 1 a 1 1
+4 1 c 1 2
+4 1 e 1 3
+4 1 b 1 4
+4 1 d 1 5
+0");
+
+    if let ParseResult::Complete(aspif_program) =  aspif::read_aspif(buf_reader).unwrap(){
+        let x = graph_from_aspif(&aspif_program);
+        // assert_eq!(nogoods[5], vec![l1, l3, l2]);
     }
 }
 
@@ -483,14 +523,15 @@ impl Builder {
             var_to_nogoods,
             nogoods_to_var,
             decision_level: 0,
-            assignments_log: vec![(None, None, 0); number_of_variables],
+            decision_number: 0,
+            assignments_log: vec![(None, None, 0, 0); number_of_variables],
             chronological_backtracking_level: 0,
         }
     }
 }
 
 #[test]
-fn test_create_rule_nogood() {
+fn test_write_rule_nogood() {
     let mut lm = LiteralMapper::default();
     let l0 = Literal::new(0, true);
     let l1 = Literal::new(1, false);
@@ -533,6 +574,53 @@ fn test_create_rule_nogood() {
     }
 }
 
+#[test]
+fn test_write_nogoods() {
+    let mut lm = LiteralMapper::default();
+
+    let na = Literal::new(0, false);
+    let ne = Literal::new(1, false);
+    let b1 = Literal::new(2, true);
+    let nb = Literal::new(3, false);
+    let mut nogoods = vec![];
+    // b :- a, not e.
+    if let aspif::Statement::Rule(rule) = aspif::read_statement_line("1 0 1 4 0 2 1 -3").unwrap() {
+        lm.write_rule_nogood(&rule, &mut nogoods);
+        assert_eq!(nogoods[0], vec![nb, b1])
+    }
+    let nd = Literal::new(4, false);
+    let b2 = Literal::new(5, true);
+    // a :- b, not d.
+    if let aspif::Statement::Rule(rule) = aspif::read_statement_line("1 0 1 1 0 2 4 -5").unwrap() {
+        lm.write_rule_nogood(&rule, &mut nogoods);
+        assert_eq!(nogoods[1], vec![na, b2])
+    }
+    let b3 = Literal::new(6, true);
+    let nc = Literal::new(7, false);
+    // c;d :- b.
+    if let aspif::Statement::Rule(rule) = aspif::read_statement_line("1 0 2 2 5 0 1 4").unwrap() {
+        lm.write_rule_nogood(&rule, &mut nogoods);
+        assert_eq!(nogoods[2], vec![nc, nd, b3])
+    }
+    let b4 = Literal::new(8, true);
+    // b :- d, c.
+    if let aspif::Statement::Rule(rule) = aspif::read_statement_line("1 0 1 4 0 2 5 2").unwrap() {
+        lm.write_rule_nogood(&rule, &mut nogoods);
+        assert_eq!(nogoods[3], vec![nb, b4])
+    }
+    let b5 = Literal::new(9, true);
+    // a;c :- not e.
+    if let aspif::Statement::Rule(rule) = aspif::read_statement_line("1 0 2 1 2 0 1 -3").unwrap() {
+        lm.write_rule_nogood(&rule, &mut nogoods);
+        assert_eq!(nogoods[4], vec![na, nc, b5])
+    }
+    let b6 = Literal::new(10, true);
+    // e :- not a, not c.
+    if let aspif::Statement::Rule(rule) = aspif::read_statement_line("1 0 1 3 0 2 -1 -2").unwrap() {
+        lm.write_rule_nogood(&rule, &mut nogoods);
+        assert_eq!(nogoods[5], vec![ne, b6])
+    }
+}
 #[test]
 fn test_collect_atom_support() {
     //TODO
