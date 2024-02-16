@@ -1,6 +1,9 @@
+#[cfg(test)]
 use crate::aspif_writer::write_aspif_program;
 use crate::solver::{Literal, Map, Solver, WatchList};
-use aspif::{AspifProgram, ParseResult};
+use aspif::AspifProgram;
+#[cfg(test)]
+use aspif::ParseResult;
 use log::{debug, info};
 use petgraph::{Directed, Graph};
 use string_interner::symbol::SymbolU32;

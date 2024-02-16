@@ -1,3 +1,4 @@
+#[cfg(test)]
 pub mod aspif_writer;
 pub mod convert;
 pub mod solver;
