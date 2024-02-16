@@ -2,7 +2,7 @@ use crate::aspif_writer::write_aspif_program;
 use crate::solver::{Literal, Map, Solver, WatchList};
 use aspif::{AspifProgram, ParseResult};
 use log::{debug, info};
-use petgraph::Graph;
+use petgraph::{Directed, Graph};
 use string_interner::symbol::SymbolU32;
 use string_interner::StringInterner;
 
@@ -262,9 +262,9 @@ use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 
 /// Create a (directed) positive atom dependency graph
-pub fn graph_from_aspif(aspif_program: &AspifProgram) -> Graph<u32, ()> {
+fn positive_atom_dependency_graph(aspif_program: &AspifProgram) -> Graph<(), (), Directed, usize> {
     info!("Create a (directed) positive atom dependency graph (wip)...");
-    let mut positive_atom_dependency_graph: DiGraph<u32, ()> = DiGraph::default();
+    let mut graph: Graph<(), (), Directed, usize> = DiGraph::default();
     for statement in &aspif_program.statements {
         match statement {
             aspif::Statement::Rule(rule) => {
@@ -273,9 +273,9 @@ pub fn graph_from_aspif(aspif_program: &AspifProgram) -> Graph<u32, ()> {
                         let mut body_clause = vec![];
                         for atom in elements {
                             if *atom >= 0 {
-                                let uatom = *atom as u64;
-                                while positive_atom_dependency_graph.node_count() as u64 <= uatom {
-                                    let _a = positive_atom_dependency_graph.add_node(0);
+                                let uatom = *atom as usize;
+                                while graph.node_count() < uatom {
+                                    let _a = graph.add_node(());
                                 }
                                 body_clause.push(uatom);
                             }
@@ -294,20 +294,16 @@ pub fn graph_from_aspif(aspif_program: &AspifProgram) -> Graph<u32, ()> {
                     aspif::Head::Disjunction { elements } => {
                         for body_atom in positive_body {
                             for head_atom in elements {
-                                while positive_atom_dependency_graph.node_count()
-                                    <= *head_atom as usize
-                                {
-                                    let _a = positive_atom_dependency_graph.add_node(0);
+                                while graph.node_count() < *head_atom as usize {
+                                    let _a = graph.add_node(());
                                 }
                                 // TODO: Possible problem when usize is converted to u32 👇️
-                                let a = NodeIndex::from(*head_atom as u32);
-                                while positive_atom_dependency_graph.node_count() as u64
-                                    <= body_atom
-                                {
-                                    let _a = positive_atom_dependency_graph.add_node(0);
+                                let a = NodeIndex::from((*head_atom - 1) as usize);
+                                while graph.node_count() < body_atom as usize {
+                                    let _a = graph.add_node(());
                                 }
-                                let b = NodeIndex::from(body_atom as u32);
-                                positive_atom_dependency_graph.add_edge(a, b, ());
+                                let b = NodeIndex::from(body_atom - 1);
+                                graph.add_edge(a, b, ());
                             }
                         }
                     }
@@ -354,23 +350,20 @@ pub fn graph_from_aspif(aspif_program: &AspifProgram) -> Graph<u32, ()> {
             }
         }
     }
-    positive_atom_dependency_graph
+    graph
 }
 
 /// Create a (directed) positive atom dependency graph
-/// The positive atom depency graph will be used to compute scc's which correspond to loops of the program
-pub fn sccs_from_program(aspif_program: &AspifProgram) -> Vec<Vec<usize>> {
-    let positive_atom_dependency_graph = graph_from_aspif(aspif_program);
+/// The graph will be used to compute scc's which correspond to loops of the program
+fn sccs_from_program(aspif_program: &AspifProgram) -> Vec<Vec<usize>> {
+    let graph = positive_atom_dependency_graph(aspif_program);
     info!("Strongly connected components ...");
-    let components = tarjan_scc(&positive_atom_dependency_graph);
+    let components = tarjan_scc(&graph);
 
     let mut sccs = vec![];
     for scc in &components {
-        let x: Vec<usize> = scc.iter().map(|node| node.index()).collect();
-        if x[0] != 0 {
-            // Remove the scc [0] that is only included because NodeIndex starts with 0
-            sccs.push(x);
-        }
+        let x: Vec<usize> = scc.iter().map(|node| node.index() + 1).collect();
+        sccs.push(x);
         debug!("{scc:?}");
     }
     sccs
