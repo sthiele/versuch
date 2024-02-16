@@ -10,7 +10,7 @@ edition = "2021"
 rustc-hash = "1.1.0"
 genawaiter = { version = "0.99" }
 string-interner = "0.14"
-fnv = "1.0"                                                                    # deterministic HashMap
+fnv = "1.0"                                                # deterministic HashMap
 petgraph = "0.6"
 aspif = { git = "https://github.com/sthiele/aspif-parser", branch = "st/wip" }
 # aspif = {path = "../../aspif-parser"}
