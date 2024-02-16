@@ -705,7 +705,7 @@ fn test_collect_atom_support() {
 }
 
 pub fn component_shifting(aspif_program: &AspifProgram) -> AspifProgram {
-    let sccs = sccs_from_program(&aspif_program);
+    let sccs = sccs_from_program(aspif_program);
     let mut statements = vec![];
     for statement in &aspif_program.statements {
         debug!("stmt:{:?}", statement);

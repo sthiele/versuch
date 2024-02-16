@@ -12,7 +12,7 @@ pub fn write_aspif_program(mut out: impl Write, program: &AspifProgram) -> std::
     }
     writeln!(out)?;
     for statement in &program.statements {
-        write_aspif_statement(&mut out, &statement)?;
+        write_aspif_statement(&mut out, statement)?;
     }
     Ok(())
 }
