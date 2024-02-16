@@ -85,10 +85,10 @@ fn run(opt: Opt) -> Result<()> {
     info!("Translate to nogoods (wip) ...");
     let (builder, symbol_mapper, interner) = match parse_result {
         aspif::ParseResult::Complete(aspif_program) => {
-            info!("Create a (directed) positive atom dependecy graph (wip)...");
-            let res = solver::convert::graph_from_aspif(&aspif_program);
+            info!("Create a component-shifted version of the program )...");
+            let shifted_program = solver::convert::component_shifting(&aspif_program);
             info!("Create a builder (wip) ...");
-            Builder::from_aspif(&aspif_program)
+            Builder::from_aspif(&shifted_program)
         }
         aspif::ParseResult::Incomplete(_) => {
             warn!("Could not read complete aspif program.");

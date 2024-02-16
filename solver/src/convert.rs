@@ -1,8 +1,8 @@
-use std::io::BufReader;
-
+use crate::aspif_writer::write_aspif_program;
 use crate::solver::{Literal, Map, Solver, WatchList};
 use aspif::{AspifProgram, ParseResult};
 use log::{debug, info};
+use petgraph::Graph;
 use string_interner::symbol::SymbolU32;
 use string_interner::StringInterner;
 
@@ -262,25 +262,22 @@ use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 
 /// Create a (directed) positive atom dependency graph
-/// The graph will be used to compute scc's which correspond to loops of the program
-pub fn graph_from_aspif(aspif_program: &AspifProgram) {
-    let mut literal_mapper = LiteralMapper::default();
+pub fn graph_from_aspif(aspif_program: &AspifProgram) -> Graph<u32, ()> {
+    info!("Create a (directed) positive atom dependency graph (wip)...");
     let mut positive_atom_dependency_graph: DiGraph<u32, ()> = DiGraph::default();
-
     for statement in &aspif_program.statements {
-        debug!("stmt:{:?}", statement);
         match statement {
             aspif::Statement::Rule(rule) => {
                 let positive_body = match &rule.body {
                     aspif::Body::NormalBody { elements } => {
                         let mut body_clause = vec![];
                         for atom in elements {
-                            let body_lit = literal_mapper.i64_to_solver_literal(atom);
                             if *atom >= 0 {
-                                while positive_atom_dependency_graph.node_count() <= body_lit.id() {
+                                let uatom = *atom as u64;
+                                while positive_atom_dependency_graph.node_count() as u64 <= uatom {
                                     let _a = positive_atom_dependency_graph.add_node(0);
                                 }
-                                body_clause.push(body_lit);
+                                body_clause.push(uatom);
                             }
                         }
                         body_clause.sort();
@@ -295,22 +292,21 @@ pub fn graph_from_aspif(aspif_program: &AspifProgram) {
                 };
                 match &rule.head {
                     aspif::Head::Disjunction { elements } => {
-                        for body_lit in &positive_body {
-                            for head_atom_id in elements {
+                        for body_atom in positive_body {
+                            for head_atom in elements {
                                 while positive_atom_dependency_graph.node_count()
-                                    <= *head_atom_id as usize
+                                    <= *head_atom as usize
                                 {
                                     let _a = positive_atom_dependency_graph.add_node(0);
                                 }
-                                let head_lit = literal_mapper.u64_to_solver_literal(head_atom_id);
                                 // TODO: Possible problem when usize is converted to u32 👇️
-                                let a = NodeIndex::from(head_lit.id() as u32);
-                                eprintln!("head_atom_id: {}, node_idx: {:?}", *head_atom_id, a);
-                                while positive_atom_dependency_graph.node_count() <= body_lit.id() {
+                                let a = NodeIndex::from(*head_atom as u32);
+                                while positive_atom_dependency_graph.node_count() as u64
+                                    <= body_atom
+                                {
                                     let _a = positive_atom_dependency_graph.add_node(0);
                                 }
-                                let b = NodeIndex::from(body_lit.id() as u32);
-                                eprintln!("body_lit_id: {}, node_idx: {:?}", body_lit.id(), b);
+                                let b = NodeIndex::from(body_atom as u32);
                                 positive_atom_dependency_graph.add_edge(a, b, ());
                             }
                         }
@@ -358,20 +354,41 @@ pub fn graph_from_aspif(aspif_program: &AspifProgram) {
             }
         }
     }
+    positive_atom_dependency_graph
+}
 
-    debug!("positive_atom_dependency_graph: {positive_atom_dependency_graph:?}");
+/// Create a (directed) positive atom dependency graph
+/// The positive atom depency graph will be used to compute scc's which correspond to loops of the program
+pub fn sccs_from_program(aspif_program: &AspifProgram) -> Vec<Vec<usize>> {
+    let positive_atom_dependency_graph = graph_from_aspif(aspif_program);
     info!("Strongly connected components ...");
     let components = tarjan_scc(&positive_atom_dependency_graph);
 
-    for scc in components {
+    let mut sccs = vec![];
+    for scc in &components {
+        let x: Vec<usize> = scc.iter().map(|node| node.index()).collect();
+        if x[0] != 0 {
+            // Remove the scc [0] that is only included because NodeIndex starts with 0
+            sccs.push(x);
+        }
         debug!("{scc:?}");
     }
+    sccs
 }
 
 #[test]
-fn test_graph_from_aspif() {
+fn test_program_shifting_shifted() {
     use std::io::Cursor;
-    let buf_reader = Cursor::new(r"asp 1 0 0
+    let buf_reader = Cursor::new(
+        /*
+        b :- a,~e.
+        a :- b, ~d.
+        c;d :- b.
+        b :- d, c.
+        a;c :- ~e.
+        e :- ~a, ~c.
+        */
+        r"asp 1 0 0
 1 0 1 4 0 2 1 -3
 1 0 1 1 0 2 4 -5
 1 0 2 2 5 0 1 4
@@ -383,14 +400,75 @@ fn test_graph_from_aspif() {
 4 1 e 1 3
 4 1 b 1 4
 4 1 d 1 5
-0");
+0",
+    );
 
-    if let ParseResult::Complete(aspif_program) =  aspif::read_aspif(buf_reader).unwrap(){
-        let x = graph_from_aspif(&aspif_program);
-        // assert_eq!(nogoods[5], vec![l1, l3, l2]);
+    if let ParseResult::Complete(aspif_program) = aspif::read_aspif(buf_reader).unwrap() {
+        let sccs = sccs_from_program(&aspif_program);
+        // The order of nodes in scc might change
+        assert_eq!(sccs, [vec![5, 2, 4, 1], vec![3]]);
+
+        let shifted_program = component_shifting(&aspif_program);
+        let mut res = Vec::new();
+        write_aspif_program(&mut res, &shifted_program).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&res).unwrap(),
+            r"asp 1 0 0
+1 0 1 4 0 2 1 -3
+1 0 1 1 0 2 4 -5
+1 0 2 2 5 0 1 4
+1 0 1 4 0 2 5 2
+1 0 2 1 2 0 1 -3
+1 0 1 3 0 2 -1 -2
+"
+        );
     }
 }
+#[test]
+fn test_program_shifting_unshifted() {
+    use std::io::Cursor;
+    let buf_reader = Cursor::new(
+        /*
+        b :- a,~e.
+        a :- b, ~d.
+        c;d :- b.
+        b :- d, c.
+        e; a; c.
+        */
+        r"asp 1 0 0
+1 0 1 4 0 2 1 -3
+1 0 1 1 0 2 4 -5
+1 0 2 2 5 0 1 4
+1 0 1 4 0 2 5 2
+1 0 3 3 1 2 0 0
+4 1 a 1 1
+4 1 c 1 2
+4 1 e 1 3
+4 1 b 1 4
+4 1 d 1 5
+0",
+    );
 
+    if let ParseResult::Complete(aspif_program) = aspif::read_aspif(buf_reader).unwrap() {
+        let sccs = sccs_from_program(&aspif_program);
+        // The order of nodes in scc might change
+        assert_eq!(sccs, [vec![5, 2, 4, 1], vec![3]]);
+        let shifted_program = component_shifting(&aspif_program);
+        let mut res = Vec::new();
+        write_aspif_program(&mut res, &shifted_program).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&res).unwrap(),
+            r"asp 1 0 0
+1 0 1 4 0 2 1 -3
+1 0 1 1 0 2 4 -5
+1 0 2 2 5 0 1 4
+1 0 1 4 0 2 5 2
+1 0 2 1 2 0 1 -3
+1 0 1 3 0 2 -1 -2
+"
+        );
+    }
+}
 pub struct Builder {
     pub(crate) nogoods: Vec<Vec<Literal>>,
 }
@@ -624,6 +702,115 @@ fn test_write_nogoods() {
 #[test]
 fn test_collect_atom_support() {
     //TODO
+}
+
+pub fn component_shifting(aspif_program: &AspifProgram) -> AspifProgram {
+    let sccs = sccs_from_program(&aspif_program);
+    let mut statements = vec![];
+    for statement in &aspif_program.statements {
+        debug!("stmt:{:?}", statement);
+        match statement {
+            aspif::Statement::Rule(rule) => {
+                let mut new_xxxxxx = vec![];
+                match &rule.head {
+                    aspif::Head::Disjunction { elements } => {
+                        for scc in &sccs {
+                            debug!("scc: {:?}", scc);
+                            let mut loop_atoms = vec![];
+                            let mut non_loop_atoms = vec![];
+                            for atom in elements {
+                                if scc.contains(&(*atom as usize)) {
+                                    debug!("x: {atom}");
+                                    loop_atoms.push(*atom);
+                                } else {
+                                    debug!("o: {atom}");
+                                    non_loop_atoms.push(*atom);
+                                }
+                            }
+                            if !loop_atoms.is_empty() {
+                                new_xxxxxx.push((loop_atoms, non_loop_atoms));
+                            }
+                        }
+                    }
+                    aspif::Head::Choice { elements } => {
+                        panic!("Unsupported Head : Choice")
+                    }
+                }
+                match &rule.body {
+                    aspif::Body::NormalBody { elements } => {
+                        for (a, b) in new_xxxxxx {
+                            let mut new_body_elements = elements.clone();
+                            for e in b {
+                                new_body_elements.push(-(e as i64));
+                            }
+
+                            for f in &a {
+                                eprint!("{f} ");
+                            }
+                            eprint!(":- ");
+                            for f in &new_body_elements {
+                                eprint!("{f} ");
+                            }
+                            eprintln!(".");
+
+                            statements.push(aspif::Statement::Rule(aspif::Rule {
+                                head: aspif::Head::Disjunction { elements: a },
+                                body: aspif::Body::NormalBody {
+                                    elements: new_body_elements,
+                                },
+                            }))
+                        }
+                    }
+                    aspif::Body::WeightBody {
+                        lowerbound: _,
+                        elements: _,
+                    } => {
+                        panic!("Unsupported Body")
+                    }
+                };
+            }
+            // aspif::Statement::Minimize(_) => todo!(),
+            // aspif::Statement::Projection(_) => todo!(),
+            aspif::Statement::Output(_) => {}
+            // aspif::Statement::External { atom, init } => todo!(),
+            // aspif::Statement::Assumption(_) => todo!(),
+            // aspif::Statement::Heuristic {
+            //     modifier,
+            //     atom,
+            //     k,
+            //     priority,
+            //     condition,
+            // } => todo!(),
+            // aspif::Statement::Edge { u, v, condition } => todo!(),
+            // aspif::Statement::NumericTheoryTerm { id, w } => todo!(),
+            // aspif::Statement::SymbolicTheoryTerm { id, string } => todo!(),
+            // aspif::Statement::CompoundTheoryTerm { id, t, terms } => todo!(),
+            // aspif::Statement::TheoryAtomElements {
+            //     id,
+            //     theory_terms,
+            //     literals,
+            // } => todo!(),
+            // aspif::Statement::TheoryAtom {
+            //     atom,
+            //     symbolic_term,
+            //     theory_atom_elements,
+            //     theory_operation,
+            // } => todo!(),
+            // aspif::Statement::TheoryDirective {
+            //     symbolic_term,
+            //     theory_atom_elements,
+            //     theory_operation,
+            // } => todo!(),
+            // aspif::Statement::Comment => todo!(),
+            _ => {
+                panic!("Unsupported Statement");
+            }
+        }
+    }
+    AspifProgram {
+        header: aspif_program.header,
+        statements,
+    }
 }
 // pub struct GroundDisjunctiveRule {
 //     head: Vec<u32>,
