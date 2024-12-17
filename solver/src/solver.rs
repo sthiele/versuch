@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::usize;
 // solve() uses a SolveResult generator as iterator.
 use genawaiter::sync::Gen;
 use log::{debug, trace};

@@ -302,7 +302,7 @@ fn positive_atom_dependency_graph(aspif_program: &AspifProgram) -> Graph<(), (),
                                 }
                                 // TODO: Possible problem when usize is converted to u32 👇️
                                 let a = NodeIndex::from((*head_atom - 1) as usize);
-                                while graph.node_count() < body_atom as usize {
+                                while graph.node_count() < body_atom {
                                     let _a = graph.add_node(());
                                 }
                                 let b = NodeIndex::from(body_atom - 1);
