@@ -9,15 +9,22 @@ pub struct Literal {
     sign: bool,
 }
 impl Literal {
+    /// Creates a new Literal instance with given id and sign
     pub(crate) fn new(id: usize, sign: bool) -> Literal {
         Literal { id, sign }
     }
+
+    /// Returns the ID of the literal.
     pub fn id(&self) -> usize {
         self.id
     }
+
+    /// Returns the sign of the literal.
     pub fn sign(&self) -> bool {
         self.sign
     }
+
+    /// Negates the sign of a given literal.
     pub(crate) fn negate(&self) -> Literal {
         Literal {
             id: self.id,
