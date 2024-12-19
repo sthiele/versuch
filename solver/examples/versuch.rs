@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use log::{debug, error, info, warn};
 use solver::convert::Builder;
+use solver::convert::sccs_from_program;
 use solver::solver::create_test_solver;
 use std::fs;
 use std::io;
@@ -86,7 +87,8 @@ fn run(opt: Opt) -> Result<()> {
     let (builder, symbol_mapper, interner) = match parse_result {
         aspif::ParseResult::Complete(aspif_program) => {
             info!("Create a component-shifted version of the program )...");
-            let shifted_program = solver::convert::component_shifting(&aspif_program);
+            let sccs = sccs_from_program(&aspif_program);
+            let shifted_program = solver::convert::component_shifting(&aspif_program, &sccs);
             info!("Create a builder (wip) ...");
             Builder::from_aspif(&shifted_program)
         }

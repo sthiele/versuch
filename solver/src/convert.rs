@@ -358,7 +358,7 @@ fn positive_atom_dependency_graph(aspif_program: &AspifProgram) -> Graph<(), (),
 
 /// Create a (directed) positive atom dependency graph
 /// The graph will be used to compute scc's which correspond to loops of the program
-fn sccs_from_program(aspif_program: &AspifProgram) -> Vec<Vec<usize>> {
+pub fn sccs_from_program(aspif_program: &AspifProgram) -> Vec<Vec<usize>> {
     let graph = positive_atom_dependency_graph(aspif_program);
     info!("Strongly connected components ...");
     let components = tarjan_scc(&graph);
@@ -403,8 +403,8 @@ fn test_program_shifting_shifted() {
         let sccs = sccs_from_program(&aspif_program);
         // The order of nodes in scc might change
         assert_eq!(sccs, [vec![5, 2, 4, 1], vec![3]]);
-
-        let shifted_program = component_shifting(&aspif_program);
+        let sccs = sccs_from_program(&aspif_program);
+        let shifted_program = component_shifting(&aspif_program, &sccs);
         let mut res = Vec::new();
         write_aspif_program(&mut res, &shifted_program).unwrap();
         assert_eq!(
@@ -449,7 +449,8 @@ fn test_program_shifting_unshifted() {
         let sccs = sccs_from_program(&aspif_program);
         // The order of nodes in scc might change
         assert_eq!(sccs, [vec![5, 2, 4, 1], vec![3]]);
-        let shifted_program = component_shifting(&aspif_program);
+        let sccs = sccs_from_program(&aspif_program);
+        let shifted_program = component_shifting(&aspif_program, &sccs);
         let mut res = Vec::new();
         write_aspif_program(&mut res, &shifted_program).unwrap();
         assert_eq!(
@@ -529,6 +530,7 @@ impl Builder {
         }
         literal_mapper.write_support_nogoods(&mut nogoods);
         literal_mapper.write_conjuction_nogoods(&mut nogoods);
+        // literal_mapper.write_loop_nogoods(&mut nogoods);
 
         (Builder { nogoods }, symbol_mapper, interner)
     }
@@ -699,9 +701,7 @@ fn test_write_nogoods() {
 fn test_collect_atom_support() {
     //TODO
 }
-
-pub fn component_shifting(aspif_program: &AspifProgram) -> AspifProgram {
-    let sccs = sccs_from_program(aspif_program);
+pub fn component_shifting(aspif_program: &AspifProgram, sccs: &[Vec<usize>]) -> AspifProgram {
     let mut statements = vec![];
     for statement in &aspif_program.statements {
         debug!("stmt:{:?}", statement);
@@ -710,7 +710,7 @@ pub fn component_shifting(aspif_program: &AspifProgram) -> AspifProgram {
                 let mut new_xxxxxx = vec![];
                 match &rule.head {
                     aspif::Head::Disjunction { elements } => {
-                        for scc in &sccs {
+                        for scc in sccs {
                             debug!("scc: {:?}", scc);
                             let mut loop_atoms = vec![];
                             let mut non_loop_atoms = vec![];
