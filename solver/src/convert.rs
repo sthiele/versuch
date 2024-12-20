@@ -72,29 +72,11 @@ impl LiteralMapper {
     /// This function creates rule nogoods as in Definition 1 in *Advanced Conflict-Driven Disjunctive Answer Set Solving*
     /// It also collects support body clauses for atom wise shifted rules as in *Advanced Conflict-Driven Disjunctive Answer Set Solving*
     fn write_rule_nogood(&mut self, rule: &aspif::Rule, nogoods: &mut Vec<Vec<Literal>>) {
-        let body_clause = match &rule.body {
-            aspif::Body::NormalBody { elements } => {
-                // Create clause that makes the body true
-                let mut body_clause = vec![];
-                for e in elements {
-                    body_clause.push(self.i64_to_solver_literal(e));
-                }
-                // TODO: is sort and dedup here necessary ?
-                body_clause.sort();
-                body_clause.dedup();
-                body_clause
-            }
-            aspif::Body::WeightBody {
-                lowerbound: _,
-                elements: _,
-            } => {
-                panic!("Unsupported Body")
-            }
-        };
         match &rule.head {
             aspif::Head::Disjunction { elements } => {
-                let ori_body_lit = self.body2solver_literal(&body_clause);
-                debug!("Body_lit:{:?} -> {:?}", ori_body_lit, body_clause);
+                let body_clause = self.get_body_clause(rule);
+                let body_clause_lit = self.body2solver_literal(&body_clause);
+                debug!("Body_lit:{:?} -> {:?}", body_clause_lit, body_clause);
                 // Create rule nogood
                 let mut rule_nogood = vec![];
                 for e in elements {
@@ -102,7 +84,7 @@ impl LiteralMapper {
                     let neg_head_lit = head_lit.negate();
                     rule_nogood.push(neg_head_lit)
                 }
-                rule_nogood.push(ori_body_lit);
+                rule_nogood.push(body_clause_lit);
 
                 debug!("Rule nogood: {rule_nogood:?}");
                 nogoods.push(rule_nogood);
@@ -129,6 +111,33 @@ impl LiteralMapper {
                 panic!("Unsupported Head : Choice")
             }
         };
+    }
+
+    /// Return the clause body lit refered to on page 913 as $\beta(r)$
+    fn get_body_clause(&mut self, rule: &aspif::Rule) -> Vec<Literal>{
+        // body_clause is what on page 913 is refered to as $\beta(r)$
+        let body_clause = match &rule.body {
+            aspif::Body::NormalBody { elements } => {
+                // Create clause that makes the body true
+                let mut body_clause = vec![];
+                for e in elements {
+                    body_clause.push(self.i64_to_solver_literal(e));
+                }
+                // TODO: is sort and dedup here necessary ?
+                body_clause.sort();
+                body_clause.dedup();
+                body_clause
+            }
+            aspif::Body::WeightBody {
+                lowerbound: _,
+                elements: _,
+            } => {
+                panic!("Unsupported Body")
+            }
+        };
+        let body_clause_lit = self.body2solver_literal(&body_clause);
+        debug!("Body_lit:{:?} -> {:?}", body_clause_lit, body_clause);
+        return body_clause;
     }
 
     /// This function creates support nogoods as in Definition 2 in *Advanced Conflict-Driven Disjunctive Answer Set Solving*
